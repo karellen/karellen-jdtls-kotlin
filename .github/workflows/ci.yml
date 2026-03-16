@@ -1,0 +1,243 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  JDT_CORE_REPO: arcivanov/eclipse.jdt.core
+  JDT_CORE_BRANCH: search-participant-extension-point
+  JDTLS_REPO: arcivanov/eclipse.jdt.ls
+  JDTLS_BRANCH: feature/search-participant-extension-point
+  TYCHO_VERSION: '5.0.2'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.detect-release.outputs.release_version }}
+    steps:
+      - name: Checkout karellen-jdtls-kotlin
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect release request
+        id: detect-release
+        if: github.ref == 'refs/heads/master' && !contains(github.event.head_commit.message, '[skip ci]')
+        run: |
+          FIRST_LINE=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          if [[ "$FIRST_LINE" =~ \[release\ +([0-9]+\.[0-9]+\.[0-9]+)\] ]]; then
+            echo "release_version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          elif [[ "$FIRST_LINE" =~ \[release\] ]]; then
+            CURRENT=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+            echo "release_version=${CURRENT%-SNAPSHOT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout eclipse.jdt.core fork
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.JDT_CORE_REPO }}
+          ref: ${{ env.JDT_CORE_BRANCH }}
+          path: upstream/eclipse.jdt.core
+
+      - name: Checkout eclipse.jdt.ls fork
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.JDTLS_REPO }}
+          ref: ${{ env.JDTLS_BRANCH }}
+          path: upstream/eclipse.jdt.ls
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+          server-id: github
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Fix jdtls target platform URL
+        run: |
+          sed -i 's|https://download.eclipse.org/eclipse/updates/4.39-I-builds/|https://download.eclipse.org/eclipse/updates/4.39/|g' \
+            upstream/eclipse.jdt.ls/org.eclipse.jdt.ls.target/org.eclipse.jdt.ls.tp.target
+
+      - name: Build JDT Core fork
+        run: mvn -f upstream/eclipse.jdt.core/pom.xml clean install -DskipTests -Dtycho.baseline.skip=true -B -q
+
+      - name: Build jdtls fork
+        run: mvn -f upstream/eclipse.jdt.ls/pom.xml clean install -DskipTests -B -q -pl '!org.eclipse.jdt.ls.product'
+
+      - name: Build and test
+        run: mvn clean verify -B
+
+      - name: Deploy to GitHub Packages
+        if: github.ref == 'refs/heads/master'
+        run: mvn deploy -DskipTests -B
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: build
+    if: needs.build.outputs.release_version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+          server-id: github
+
+      - name: Set release version, tag, and prepare next development version
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.release_version }}
+        run: |
+          # Compute next development version (increment patch)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$RELEASE_VERSION"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))-SNAPSHOT"
+
+          # Set release version
+          mvn org.eclipse.tycho:tycho-versions-plugin:${TYCHO_VERSION}:set-version \
+            -DnewVersion="${RELEASE_VERSION}" -B -q
+          git add -A
+          git commit -m "Release ${RELEASE_VERSION}"
+          git tag "v${RELEASE_VERSION}"
+
+          # Set next development version
+          mvn org.eclipse.tycho:tycho-versions-plugin:${TYCHO_VERSION}:set-version \
+            -DnewVersion="${NEXT_VERSION}" -B -q
+          git add -A
+          git commit -m "Prepare for next development iteration ${NEXT_VERSION} [skip ci]"
+
+          # Atomic push: both master and tag in one transaction
+          git push --atomic origin master "v${RELEASE_VERSION}"
+
+  publish:
+    needs: [build, release]
+    if: always() && !cancelled() && needs.build.result == 'success' && github.event_name == 'push' && (needs.release.result == 'success' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ needs.build.outputs.release_version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          ref: "v${{ steps.version.outputs.version }}"
+
+      - name: Checkout eclipse.jdt.core fork
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.JDT_CORE_REPO }}
+          ref: ${{ env.JDT_CORE_BRANCH }}
+          path: upstream/eclipse.jdt.core
+
+      - name: Checkout eclipse.jdt.ls fork
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.JDTLS_REPO }}
+          ref: ${{ env.JDTLS_BRANCH }}
+          path: upstream/eclipse.jdt.ls
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+          server-id: github
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Fix jdtls target platform URL
+        run: |
+          sed -i 's|https://download.eclipse.org/eclipse/updates/4.39-I-builds/|https://download.eclipse.org/eclipse/updates/4.39/|g' \
+            upstream/eclipse.jdt.ls/org.eclipse.jdt.ls.target/org.eclipse.jdt.ls.tp.target
+
+      - name: Build JDT Core fork
+        run: mvn -f upstream/eclipse.jdt.core/pom.xml clean install -DskipTests -Dtycho.baseline.skip=true -B -q
+
+      - name: Build jdtls fork
+        run: mvn -f upstream/eclipse.jdt.ls/pom.xml clean install -DskipTests -B -q -pl '!org.eclipse.jdt.ls.product'
+
+      - name: Build and deploy release to GitHub Packages
+        run: mvn clean deploy -B
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package per-platform archives
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PRODUCTS="co.karellen.jdtls.kotlin.product/target/products/karellen-jdtls-kotlin.product"
+          DIST="dist"
+          mkdir -p "$DIST"
+
+          # Linux x86_64
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-amd64.tar.gz" \
+            -C "$PRODUCTS/linux/gtk/x86_64" \
+            --exclude=artifacts.xml --exclude=p2 \
+            .
+
+          # Linux aarch64
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-arm64.tar.gz" \
+            -C "$PRODUCTS/linux/gtk/aarch64" \
+            --exclude=artifacts.xml --exclude=p2 \
+            .
+
+          # macOS x86_64
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-amd64.tar.gz" \
+            -C "$PRODUCTS/macosx/cocoa/x86_64" \
+            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' \
+            .
+
+          # macOS aarch64
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-arm64.tar.gz" \
+            -C "$PRODUCTS/macosx/cocoa/aarch64" \
+            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' \
+            .
+
+          # Windows x86_64
+          (cd "$PRODUCTS/win32/win32/x86_64" && \
+            zip -qr "../../../../$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
+            . -x 'artifacts.xml' 'p2/*')
+
+          ls -lh "$DIST/"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          files: dist/*
+          generate_release_notes: true

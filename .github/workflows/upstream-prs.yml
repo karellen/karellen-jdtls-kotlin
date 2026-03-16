@@ -1,0 +1,89 @@
+name: Upstream PRs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  jdt-core-pr:
+    name: JDT Core PR (search participant extension point)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout eclipse.jdt.core fork
+        uses: actions/checkout@v5
+        with:
+          repository: arcivanov/eclipse.jdt.core
+          ref: search-participant-extension-point
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-jdt-core-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-jdt-core-
+
+      - name: Build JDT Core
+        run: mvn clean install -DskipTests -Dtycho.baseline.skip=true -B
+
+      - name: Run search model tests
+        run: |
+          mvn verify \
+            -pl org.eclipse.jdt.core.tests.model \
+            -Dtycho.baseline.skip=true \
+            -Dtycho.surefire.argLine="" \
+            -Dtest='*SearchParticipant*' \
+            -DfailIfNoTests=false \
+            -B
+
+  jdtls-pr:
+    name: jdtls PR (search participant dispatch)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout eclipse.jdt.core fork
+        uses: actions/checkout@v5
+        with:
+          repository: arcivanov/eclipse.jdt.core
+          ref: search-participant-extension-point
+          path: upstream/eclipse.jdt.core
+
+      - name: Checkout eclipse.jdt.ls fork
+        uses: actions/checkout@v5
+        with:
+          repository: arcivanov/eclipse.jdt.ls
+          ref: feature/search-participant-extension-point
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-jdtls-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-jdtls-
+
+      - name: Fix target platform URL
+        run: |
+          sed -i 's|https://download.eclipse.org/eclipse/updates/4.39-I-builds/|https://download.eclipse.org/eclipse/updates/4.39/|g' \
+            org.eclipse.jdt.ls.target/org.eclipse.jdt.ls.tp.target
+
+      - name: Build JDT Core fork
+        run: mvn -f upstream/eclipse.jdt.core/pom.xml clean install -DskipTests -Dtycho.baseline.skip=true -B -q
+
+      - name: Build and test jdtls
+        run: mvn clean verify -B -pl '!org.eclipse.jdt.ls.product'
