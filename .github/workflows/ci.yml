@@ -223,45 +223,28 @@ jobs:
         run: |
           WORKSPACE=$(mktemp -d)
 
-          # LSP initialize request
-          BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}'
-          HEADER="Content-Length: ${#BODY}\r\n\r\n"
+          # Build LSP request file: initialize + exit + shutdown
+          INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}'
+          EXIT='{"jsonrpc":"2.0","method":"exit"}'
 
-          # Use a named pipe so we can feed stdin to the background process
-          FIFO=$(mktemp -u)
-          mkfifo "$FIFO"
+          {
+            printf "Content-Length: ${#INIT}\r\n\r\n%s" "$INIT"
+            printf "Content-Length: ${#EXIT}\r\n\r\n%s" "$EXIT"
+          } > request.bin
 
-          # Start jdtls in background reading from the pipe
+          # Run jdtls with request file as stdin; it will process initialize then exit
           "${{ matrix.launcher }}" \
             -configuration "${{ matrix.config }}" \
             -data "$WORKSPACE" \
             --add-modules=ALL-SYSTEM \
             --add-opens java.base/java.util=ALL-UNNAMED \
             --add-opens java.base/java.lang=ALL-UNNAMED \
-            <"$FIFO" >stdout.log 2>stderr.log &
-          JDTLS_PID=$!
+            <request.bin >stdout.log 2>stderr.log || true
 
-          # Send LSP initialize request (keep pipe open with sleep so jdtls doesn't get EOF)
-          { echo -ne "${HEADER}${BODY}"; sleep 60; } > "$FIFO" &
-          WRITER_PID=$!
-
-          # Wait up to 60s for a response
-          for i in $(seq 1 60); do
-            if [ -s stdout.log ] && grep -q '"jsonrpc"' stdout.log 2>/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-
-          kill $WRITER_PID $JDTLS_PID 2>/dev/null || true
-          wait $WRITER_PID 2>/dev/null || true
-          wait $JDTLS_PID 2>/dev/null || true
-          rm -f "$FIFO"
-
-          echo "=== stderr ==="
-          cat stderr.log | tail -20
-          echo "=== stdout ==="
-          cat stdout.log | head -20
+          echo "=== stderr (last 20 lines) ==="
+          tail -20 stderr.log
+          echo "=== stdout (first 20 lines) ==="
+          head -20 stdout.log
 
           # Check for a valid LSP response
           if grep -q '"jsonrpc"' stdout.log; then
