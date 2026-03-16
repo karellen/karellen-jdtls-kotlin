@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension point="org.eclipse.core.contenttype.contentTypes">
+      <file-association
+            content-type="org.eclipse.jdt.core.javaDerivedSource"
+            file-extensions="kt,kts"/>
+   </extension>
+   <extension point="org.eclipse.jdt.core.searchParticipant">
+      <searchParticipant
+            class="co.karellen.jdtls.kotlin.search.KotlinSearchParticipant"
+            id="co.karellen.jdtls.kotlin.searchParticipant"
+            fileExtensions="kt,kts"/>
+   </extension>
+</plugin>

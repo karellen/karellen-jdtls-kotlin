@@ -1,0 +1,13 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Karellen JDTLS Kotlin Tests
+Bundle-SymbolicName: co.karellen.jdtls.kotlin.tests;singleton:=true
+Bundle-Version: 1.0.0.qualifier
+Bundle-Vendor: Karellen, Inc.
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Require-Bundle: co.karellen.jdtls.kotlin,
+ org.eclipse.core.runtime,
+ org.eclipse.core.resources,
+ org.eclipse.jdt.core
+Import-Package: org.junit.jupiter.api,
+ org.junit.jupiter.api.extension
