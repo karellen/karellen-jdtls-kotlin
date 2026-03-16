@@ -114,7 +114,7 @@ jobs:
             --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
 
           (cd "$PRODUCTS/win32/win32/x86_64" && \
-            zip -qr "../../../../$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
+            zip -qr "$OLDPWD/$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
             . -x 'artifacts.xml' 'p2/*')
 
           ls -lh "$DIST/"
