@@ -57,14 +57,14 @@ jobs:
           path: upstream/eclipse.jdt.ls
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: '25'
           server-id: github
 
       - name: Cache Maven repository
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/*.target') }}
@@ -121,7 +121,7 @@ jobs:
 
       - name: Upload platform archives
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: platform-archives
           path: dist/*
@@ -145,7 +145,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: '25'
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download platform archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: platform-archives
           path: dist
