@@ -47,6 +47,7 @@ jobs:
             -B
 
   jdtls-pr:
+    needs: jdt-core-pr
     name: jdtls PR (search participant dispatch)
     runs-on: ubuntu-latest
     steps:
