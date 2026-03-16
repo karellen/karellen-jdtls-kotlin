@@ -165,8 +165,99 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  release:
+  integration-test:
     needs: build
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            artifact: karellen-jdtls-kotlin-linux-gtk-x86_64
+            extract: tar xzf *.tar.gz
+            launcher: ./jdtls
+            config: ./configuration
+          - runner: ubuntu-24.04-arm
+            artifact: karellen-jdtls-kotlin-linux-gtk-aarch64
+            extract: tar xzf *.tar.gz
+            launcher: ./jdtls
+            config: ./configuration
+          - runner: macos-15-intel
+            artifact: karellen-jdtls-kotlin-macosx-cocoa-x86_64
+            extract: tar xzf *.tar.gz
+            launcher: ./Eclipse.app/Contents/MacOS/jdtls
+            config: ./Eclipse.app/Contents/Eclipse/configuration
+          - runner: macos-15
+            artifact: karellen-jdtls-kotlin-macosx-cocoa-aarch64
+            extract: tar xzf *.tar.gz
+            launcher: ./Eclipse.app/Contents/MacOS/jdtls
+            config: ./Eclipse.app/Contents/Eclipse/configuration
+          - runner: windows-latest
+            artifact: karellen-jdtls-kotlin-win32-x86_64
+            extract: unzip -q *.zip
+            launcher: ./jdtls.exe
+            config: ./configuration
+    runs-on: ${{ matrix.runner }}
+    name: integration-test (${{ matrix.artifact }})
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: archive
+
+      - name: Extract
+        working-directory: archive
+        run: ${{ matrix.extract }}
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '25'
+
+      - name: Verify launcher exists
+        working-directory: archive
+        shell: bash
+        run: |
+          ls -la "${{ matrix.launcher }}"
+          file "${{ matrix.launcher }}" || true
+
+      - name: Smoke test — LSP initialize
+        working-directory: archive
+        shell: bash
+        run: |
+          WORKSPACE=$(mktemp -d)
+
+          # LSP initialize request
+          BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}'
+          HEADER="Content-Length: ${#BODY}\r\n\r\n"
+
+          # Start jdtls, send initialize, capture response
+          echo -ne "${HEADER}${BODY}" | \
+            timeout 60 "${{ matrix.launcher }}" \
+              -configuration "${{ matrix.config }}" \
+              -data "$WORKSPACE" \
+              --add-modules=ALL-SYSTEM \
+              --add-opens java.base/java.util=ALL-UNNAMED \
+              --add-opens java.base/java.lang=ALL-UNNAMED \
+              2>stderr.log >stdout.log || true
+
+          echo "=== stderr ==="
+          cat stderr.log | tail -20
+          echo "=== stdout ==="
+          cat stdout.log | head -20
+
+          # Check for a valid LSP response
+          if grep -q '"jsonrpc"' stdout.log; then
+            echo "LSP initialize response received"
+          else
+            echo "ERROR: No LSP response received"
+            exit 1
+          fi
+
+  release:
+    needs: [build, integration-test]
     if: needs.build.outputs.release_version != ''
     runs-on: ubuntu-latest
     steps:
@@ -208,8 +299,8 @@ jobs:
           git push --atomic origin master "v${RELEASE_VERSION}"
 
   publish:
-    needs: [build, release]
-    if: always() && !cancelled() && needs.build.result == 'success' && github.event_name == 'push' && (needs.release.result == 'success' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [build, integration-test, release]
+    if: always() && !cancelled() && needs.build.result == 'success' && needs.integration-test.result == 'success' && github.event_name == 'push' && (needs.release.result == 'success' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
       - name: Download all platform archives
