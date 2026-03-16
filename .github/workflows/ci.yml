@@ -85,6 +85,48 @@ jobs:
       - name: Build and test
         run: mvn clean verify -B
 
+      - name: Determine artifact version
+        id: artifact-version
+        run: echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> "$GITHUB_OUTPUT"
+
+      - name: Package per-platform archives
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${{ steps.artifact-version.outputs.version }}"
+          PRODUCTS="co.karellen.jdtls.kotlin.product/target/products/karellen-jdtls-kotlin.product"
+          DIST="dist"
+          mkdir -p "$DIST"
+
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-amd64.tar.gz" \
+            -C "$PRODUCTS/linux/gtk/x86_64" \
+            --exclude=artifacts.xml --exclude=p2 .
+
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-arm64.tar.gz" \
+            -C "$PRODUCTS/linux/gtk/aarch64" \
+            --exclude=artifacts.xml --exclude=p2 .
+
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-amd64.tar.gz" \
+            -C "$PRODUCTS/macosx/cocoa/x86_64" \
+            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
+
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-arm64.tar.gz" \
+            -C "$PRODUCTS/macosx/cocoa/aarch64" \
+            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
+
+          (cd "$PRODUCTS/win32/win32/x86_64" && \
+            zip -qr "../../../../$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
+            . -x 'artifacts.xml' 'p2/*')
+
+          ls -lh "$DIST/"
+
+      - name: Upload platform archives
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-archives
+          path: dist/*
+          retention-days: 30
+
       - name: Deploy to GitHub Packages
         if: github.ref == 'refs/heads/master'
         run: mvn deploy -DskipTests -B
@@ -138,6 +180,12 @@ jobs:
     if: always() && !cancelled() && needs.build.result == 'success' && github.event_name == 'push' && (needs.release.result == 'success' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
+      - name: Download platform archives
+        uses: actions/download-artifact@v4
+        with:
+          name: platform-archives
+          path: dist
+
       - name: Determine version
         id: version
         run: |
@@ -146,94 +194,6 @@ jobs:
           else
             echo "version=${{ needs.build.outputs.release_version }}" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Checkout release tag
-        uses: actions/checkout@v5
-        with:
-          ref: "v${{ steps.version.outputs.version }}"
-
-      - name: Checkout eclipse.jdt.core fork
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ env.JDT_CORE_REPO }}
-          ref: ${{ env.JDT_CORE_BRANCH }}
-          path: upstream/eclipse.jdt.core
-
-      - name: Checkout eclipse.jdt.ls fork
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ env.JDTLS_REPO }}
-          ref: ${{ env.JDTLS_BRANCH }}
-          path: upstream/eclipse.jdt.ls
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: '25'
-          server-id: github
-
-      - name: Cache Maven repository
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/*.target') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Fix jdtls target platform URL
-        run: |
-          sed -i 's|https://download.eclipse.org/eclipse/updates/4.39-I-builds/|https://download.eclipse.org/eclipse/updates/4.39/|g' \
-            upstream/eclipse.jdt.ls/org.eclipse.jdt.ls.target/org.eclipse.jdt.ls.tp.target
-
-      - name: Build JDT Core fork
-        run: mvn -f upstream/eclipse.jdt.core/pom.xml clean install -DskipTests -Dtycho.baseline.skip=true -B -q
-
-      - name: Build jdtls fork
-        run: mvn -f upstream/eclipse.jdt.ls/pom.xml clean install -DskipTests -B -q -pl '!org.eclipse.jdt.ls.product'
-
-      - name: Build and deploy release to GitHub Packages
-        run: mvn clean deploy -B
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Package per-platform archives
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PRODUCTS="co.karellen.jdtls.kotlin.product/target/products/karellen-jdtls-kotlin.product"
-          DIST="dist"
-          mkdir -p "$DIST"
-
-          # Linux x86_64
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-amd64.tar.gz" \
-            -C "$PRODUCTS/linux/gtk/x86_64" \
-            --exclude=artifacts.xml --exclude=p2 \
-            .
-
-          # Linux aarch64
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-arm64.tar.gz" \
-            -C "$PRODUCTS/linux/gtk/aarch64" \
-            --exclude=artifacts.xml --exclude=p2 \
-            .
-
-          # macOS x86_64
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-amd64.tar.gz" \
-            -C "$PRODUCTS/macosx/cocoa/x86_64" \
-            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' \
-            .
-
-          # macOS aarch64
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-arm64.tar.gz" \
-            -C "$PRODUCTS/macosx/cocoa/aarch64" \
-            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' \
-            .
-
-          # Windows x86_64
-          (cd "$PRODUCTS/win32/win32/x86_64" && \
-            zip -qr "../../../../$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
-            . -x 'artifacts.xml' 'p2/*')
-
-          ls -lh "$DIST/"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
