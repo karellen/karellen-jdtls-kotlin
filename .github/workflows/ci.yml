@@ -119,12 +119,44 @@ jobs:
 
           ls -lh "$DIST/"
 
-      - name: Upload platform archives
+      - name: Upload Linux amd64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: platform-archives
-          path: dist/*
+          name: linux-amd64
+          path: dist/*-linux-amd64.tar.gz
+          retention-days: 30
+
+      - name: Upload Linux arm64
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v5
+        with:
+          name: linux-arm64
+          path: dist/*-linux-arm64.tar.gz
+          retention-days: 30
+
+      - name: Upload macOS amd64
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-amd64
+          path: dist/*-macos-amd64.tar.gz
+          retention-days: 30
+
+      - name: Upload macOS arm64
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-arm64
+          path: dist/*-macos-arm64.tar.gz
+          retention-days: 30
+
+      - name: Upload Windows amd64
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-amd64
+          path: dist/*-windows-amd64.zip
           retention-days: 30
 
       - name: Deploy to GitHub Packages
@@ -180,11 +212,11 @@ jobs:
     if: always() && !cancelled() && needs.build.result == 'success' && github.event_name == 'push' && (needs.release.result == 'success' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
-      - name: Download platform archives
+      - name: Download all platform archives
         uses: actions/download-artifact@v5
         with:
-          name: platform-archives
           path: dist
+          merge-multiple: true
 
       - name: Determine version
         id: version
