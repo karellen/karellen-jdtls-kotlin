@@ -25,7 +25,7 @@ jobs:
       release_version: ${{ steps.detect-release.outputs.release_version }}
     steps:
       - name: Checkout karellen-jdtls-kotlin
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -43,14 +43,14 @@ jobs:
           fi
 
       - name: Checkout eclipse.jdt.core fork
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.JDT_CORE_REPO }}
           ref: ${{ env.JDT_CORE_BRANCH }}
           path: upstream/eclipse.jdt.core
 
       - name: Checkout eclipse.jdt.ls fork
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.JDTLS_REPO }}
           ref: ${{ env.JDTLS_BRANCH }}
@@ -121,7 +121,7 @@ jobs:
 
       - name: Upload karellen-jdtls-kotlin-linux-gtk-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: karellen-jdtls-kotlin-linux-gtk-x86_64
           path: dist/*-linux-gtk-x86_64.tar.gz
@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload karellen-jdtls-kotlin-linux-gtk-aarch64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: karellen-jdtls-kotlin-linux-gtk-aarch64
           path: dist/*-linux-gtk-aarch64.tar.gz
@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload karellen-jdtls-kotlin-macosx-cocoa-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: karellen-jdtls-kotlin-macosx-cocoa-x86_64
           path: dist/*-macosx-cocoa-x86_64.tar.gz
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload karellen-jdtls-kotlin-macosx-cocoa-aarch64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: karellen-jdtls-kotlin-macosx-cocoa-aarch64
           path: dist/*-macosx-cocoa-aarch64.tar.gz
@@ -153,7 +153,7 @@ jobs:
 
       - name: Upload karellen-jdtls-kotlin-win32-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: karellen-jdtls-kotlin-win32-x86_64
           path: dist/*-win32-x86_64.zip
@@ -201,7 +201,7 @@ jobs:
     name: integration-test (${{ matrix.artifact }})
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.artifact }}
           path: archive
@@ -233,15 +233,36 @@ jobs:
           BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}'
           HEADER="Content-Length: ${#BODY}\r\n\r\n"
 
-          # Start jdtls, send initialize, capture response
-          echo -ne "${HEADER}${BODY}" | \
-            timeout 60 "${{ matrix.launcher }}" \
-              -configuration "${{ matrix.config }}" \
-              -data "$WORKSPACE" \
-              --add-modules=ALL-SYSTEM \
-              --add-opens java.base/java.util=ALL-UNNAMED \
-              --add-opens java.base/java.lang=ALL-UNNAMED \
-              2>stderr.log >stdout.log || true
+          # Use a named pipe so we can feed stdin to the background process
+          FIFO=$(mktemp -u)
+          mkfifo "$FIFO"
+
+          # Start jdtls in background reading from the pipe
+          "${{ matrix.launcher }}" \
+            -configuration "${{ matrix.config }}" \
+            -data "$WORKSPACE" \
+            --add-modules=ALL-SYSTEM \
+            --add-opens java.base/java.util=ALL-UNNAMED \
+            --add-opens java.base/java.lang=ALL-UNNAMED \
+            <"$FIFO" >stdout.log 2>stderr.log &
+          JDTLS_PID=$!
+
+          # Send LSP initialize request (keep pipe open with sleep so jdtls doesn't get EOF)
+          { echo -ne "${HEADER}${BODY}"; sleep 60; } > "$FIFO" &
+          WRITER_PID=$!
+
+          # Wait up to 60s for a response
+          for i in $(seq 1 60); do
+            if [ -s stdout.log ] && grep -q '"jsonrpc"' stdout.log 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          kill $WRITER_PID $JDTLS_PID 2>/dev/null || true
+          wait $WRITER_PID 2>/dev/null || true
+          wait $JDTLS_PID 2>/dev/null || true
+          rm -f "$FIFO"
 
           echo "=== stderr ==="
           cat stderr.log | tail -20
@@ -262,7 +283,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -304,7 +325,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all platform archives
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
