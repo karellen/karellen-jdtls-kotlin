@@ -97,66 +97,66 @@ jobs:
           DIST="dist"
           mkdir -p "$DIST"
 
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-amd64.tar.gz" \
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-gtk-x86_64.tar.gz" \
             -C "$PRODUCTS/linux/gtk/x86_64" \
             --exclude=artifacts.xml --exclude=p2 .
 
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-arm64.tar.gz" \
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-gtk-aarch64.tar.gz" \
             -C "$PRODUCTS/linux/gtk/aarch64" \
             --exclude=artifacts.xml --exclude=p2 .
 
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-amd64.tar.gz" \
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macosx-cocoa-x86_64.tar.gz" \
             -C "$PRODUCTS/macosx/cocoa/x86_64" \
             --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
 
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macos-arm64.tar.gz" \
+          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macosx-cocoa-aarch64.tar.gz" \
             -C "$PRODUCTS/macosx/cocoa/aarch64" \
             --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
 
           (cd "$PRODUCTS/win32/win32/x86_64" && \
-            zip -qr "$OLDPWD/$DIST/karellen-jdtls-kotlin-${VERSION}-windows-amd64.zip" \
+            zip -qr "$OLDPWD/$DIST/karellen-jdtls-kotlin-${VERSION}-win32-x86_64.zip" \
             . -x 'artifacts.xml' 'p2/*')
 
           ls -lh "$DIST/"
 
-      - name: Upload Linux amd64
+      - name: Upload karellen-jdtls-kotlin-linux-gtk-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: linux-amd64
-          path: dist/*-linux-amd64.tar.gz
+          name: karellen-jdtls-kotlin-linux-gtk-x86_64
+          path: dist/*-linux-gtk-x86_64.tar.gz
           retention-days: 30
 
-      - name: Upload Linux arm64
+      - name: Upload karellen-jdtls-kotlin-linux-gtk-aarch64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: linux-arm64
-          path: dist/*-linux-arm64.tar.gz
+          name: karellen-jdtls-kotlin-linux-gtk-aarch64
+          path: dist/*-linux-gtk-aarch64.tar.gz
           retention-days: 30
 
-      - name: Upload macOS amd64
+      - name: Upload karellen-jdtls-kotlin-macosx-cocoa-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: macos-amd64
-          path: dist/*-macos-amd64.tar.gz
+          name: karellen-jdtls-kotlin-macosx-cocoa-x86_64
+          path: dist/*-macosx-cocoa-x86_64.tar.gz
           retention-days: 30
 
-      - name: Upload macOS arm64
+      - name: Upload karellen-jdtls-kotlin-macosx-cocoa-aarch64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: macos-arm64
-          path: dist/*-macos-arm64.tar.gz
+          name: karellen-jdtls-kotlin-macosx-cocoa-aarch64
+          path: dist/*-macosx-cocoa-aarch64.tar.gz
           retention-days: 30
 
-      - name: Upload Windows amd64
+      - name: Upload karellen-jdtls-kotlin-win32-x86_64
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v5
         with:
-          name: windows-amd64
-          path: dist/*-windows-amd64.zip
+          name: karellen-jdtls-kotlin-win32-x86_64
+          path: dist/*-win32-x86_64.zip
           retention-days: 30
 
       - name: Deploy to GitHub Packages
