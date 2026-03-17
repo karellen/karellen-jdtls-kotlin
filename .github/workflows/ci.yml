@@ -83,7 +83,23 @@ jobs:
         run: mvn -f upstream/eclipse.jdt.ls/pom.xml clean install -DskipTests -B -q -pl '!org.eclipse.jdt.ls.product'
 
       - name: Build and test
-        run: mvn clean verify -B
+        run: mvn clean install -B
+
+      - name: Save local Maven repository
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tar czf m2-repo.tar.gz -C ~/.m2/repository \
+            org/eclipse/jdt \
+            co/karellen \
+            p2
+
+      - name: Upload Maven repository
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: m2-repository
+          path: m2-repo.tar.gz
+          retention-days: 1
 
       - name: Determine artifact version
         id: artifact-version
@@ -315,6 +331,14 @@ jobs:
           distribution: zulu
           java-version: '25'
           server-id: github
+
+      - name: Download Maven repository
+        uses: actions/download-artifact@v8
+        with:
+          name: m2-repository
+
+      - name: Restore Maven repository
+        run: tar xzf m2-repo.tar.gz -C ~/.m2/repository
 
       - name: Deploy to GitHub Packages
         run: mvn deploy -DskipTests -B
