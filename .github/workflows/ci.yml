@@ -93,6 +93,7 @@ jobs:
             org/eclipse/jdt \
             co/karellen \
             p2 \
+            .meta \
             .cache/tycho
 
       - name: Upload Maven repository
