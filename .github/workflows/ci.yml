@@ -359,3 +359,18 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: dist/*
           generate_release_notes: true
+
+  cleanup:
+    needs: [build, integration-test, release, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete m2-repository artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
+            --jq '.artifacts[] | select(.name == "m2-repository") | .id')
+          if [ -n "$ARTIFACT_ID" ]; then
+            gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID
+          fi
