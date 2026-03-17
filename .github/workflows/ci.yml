@@ -8,6 +8,7 @@ on:
     branches: [master]
 
 permissions:
+  actions: write
   contents: write
   packages: write
 
@@ -91,7 +92,8 @@ jobs:
           tar czf m2-repo.tar.gz -C ~/.m2/repository \
             org/eclipse/jdt \
             co/karellen \
-            p2
+            p2 \
+            .cache/tycho
 
       - name: Upload Maven repository
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
@@ -341,7 +343,7 @@ jobs:
         run: mkdir -p ~/.m2/repository && tar xzf m2-repo.tar.gz -C ~/.m2/repository
 
       - name: Deploy to GitHub Packages
-        run: mvn deploy -DskipTests -B
+        run: mvn deploy -DskipTests -pl '!co.karellen.jdtls.kotlin.tests' -B
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
