@@ -338,7 +338,7 @@ jobs:
           name: m2-repository
 
       - name: Restore Maven repository
-        run: tar xzf m2-repo.tar.gz -C ~/.m2/repository
+        run: mkdir -p ~/.m2/repository && tar xzf m2-repo.tar.gz -C ~/.m2/repository
 
       - name: Deploy to GitHub Packages
         run: mvn deploy -DskipTests -B
