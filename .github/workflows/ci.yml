@@ -13,12 +13,6 @@ permissions:
   packages: write
 
 env:
-  JDT_CORE_REPO: arcivanov/eclipse.jdt.core
-  JDT_CORE_BRANCH: search-participant-extension-point
-  JDT_UI_REPO: arcivanov/eclipse.jdt.ui
-  JDT_UI_BRANCH: call-hierarchy-search-participants
-  JDTLS_REPO: arcivanov/eclipse.jdt.ls
-  JDTLS_BRANCH: feature/search-participant-extension-point
   TYCHO_VERSION: '5.0.2'
 
 jobs:
@@ -45,27 +39,6 @@ jobs:
             echo "release_version=${CURRENT%-SNAPSHOT}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout eclipse.jdt.core fork
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.JDT_CORE_REPO }}
-          ref: ${{ env.JDT_CORE_BRANCH }}
-          path: upstream/eclipse.jdt.core
-
-      - name: Checkout eclipse.jdt.ui fork
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.JDT_UI_REPO }}
-          ref: ${{ env.JDT_UI_BRANCH }}
-          path: upstream/eclipse.jdt.ui
-
-      - name: Checkout eclipse.jdt.ls fork
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.JDTLS_REPO }}
-          ref: ${{ env.JDTLS_BRANCH }}
-          path: upstream/eclipse.jdt.ls
-
       - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
@@ -81,14 +54,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Build JDT Core fork
-        run: mvn -f upstream/eclipse.jdt.core/pom.xml clean install -DskipTests -Dtycho.baseline.skip=true -B -q
-
-      - name: Build JDT Core Manipulation fork
-        run: mvn -f upstream/eclipse.jdt.ui/pom.xml clean install -pl org.eclipse.jdt.core.manipulation -DskipTests -Dtycho.baseline.skip=true -B -q
-
-      - name: Build jdtls fork
-        run: mvn -f upstream/eclipse.jdt.ls/pom.xml clean install -DskipTests -B -q -pl '!org.eclipse.jdt.ls.product'
+      - name: Resolve fork artifacts from GitHub Packages
+        run: |
+          mvn dependency:resolve -B -q \
+            -DremoteRepositories=github-jdtls::default::https://maven.pkg.github.com/karellen/karellen-jdtls \
+            || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and test with coverage
         run: mvn clean install -B
@@ -123,188 +95,8 @@ jobs:
           format: jacoco
           base-path: co.karellen.jdtls.kotlin/src
 
-      - name: Save local Maven repository
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        run: |
-          tar czf m2-repo.tar.gz -C ~/.m2/repository \
-            org/eclipse/jdt \
-            co/karellen \
-            p2 \
-            .meta \
-            .cache/tycho
-
-      - name: Upload Maven repository
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
-        with:
-          name: m2-repository
-          path: m2-repo.tar.gz
-          retention-days: 1
-
-      - name: Determine artifact version
-        id: artifact-version
-        run: echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> "$GITHUB_OUTPUT"
-
-      - name: Package per-platform archives
-        run: |
-          VERSION="${{ steps.artifact-version.outputs.version }}"
-          PRODUCTS="co.karellen.jdtls.kotlin.product/target/products/karellen-jdtls-kotlin.product"
-          DIST="dist"
-          mkdir -p "$DIST"
-
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-gtk-x86_64.tar.gz" \
-            -C "$PRODUCTS/linux/gtk/x86_64" \
-            --exclude=artifacts.xml --exclude=p2 .
-
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-linux-gtk-aarch64.tar.gz" \
-            -C "$PRODUCTS/linux/gtk/aarch64" \
-            --exclude=artifacts.xml --exclude=p2 .
-
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macosx-cocoa-x86_64.tar.gz" \
-            -C "$PRODUCTS/macosx/cocoa/x86_64" \
-            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
-
-          tar czf "$DIST/karellen-jdtls-kotlin-${VERSION}-macosx-cocoa-aarch64.tar.gz" \
-            -C "$PRODUCTS/macosx/cocoa/aarch64" \
-            --exclude=artifacts.xml --exclude='Eclipse.app/Contents/Eclipse/p2' .
-
-          (cd "$PRODUCTS/win32/win32/x86_64" && \
-            zip -qr "$OLDPWD/$DIST/karellen-jdtls-kotlin-${VERSION}-win32-x86_64.zip" \
-            . -x 'artifacts.xml' 'p2/*')
-
-          ls -lh "$DIST/"
-
-      - name: Upload karellen-jdtls-kotlin-linux-gtk-x86_64
-        uses: actions/upload-artifact@v7
-        with:
-          name: karellen-jdtls-kotlin-linux-gtk-x86_64
-          path: dist/*-linux-gtk-x86_64.tar.gz
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-      - name: Upload karellen-jdtls-kotlin-linux-gtk-aarch64
-        uses: actions/upload-artifact@v7
-        with:
-          name: karellen-jdtls-kotlin-linux-gtk-aarch64
-          path: dist/*-linux-gtk-aarch64.tar.gz
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-      - name: Upload karellen-jdtls-kotlin-macosx-cocoa-x86_64
-        uses: actions/upload-artifact@v7
-        with:
-          name: karellen-jdtls-kotlin-macosx-cocoa-x86_64
-          path: dist/*-macosx-cocoa-x86_64.tar.gz
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-      - name: Upload karellen-jdtls-kotlin-macosx-cocoa-aarch64
-        uses: actions/upload-artifact@v7
-        with:
-          name: karellen-jdtls-kotlin-macosx-cocoa-aarch64
-          path: dist/*-macosx-cocoa-aarch64.tar.gz
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-      - name: Upload karellen-jdtls-kotlin-win32-x86_64
-        uses: actions/upload-artifact@v7
-        with:
-          name: karellen-jdtls-kotlin-win32-x86_64
-          path: dist/*-win32-x86_64.zip
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-  integration-test:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            artifact: karellen-jdtls-kotlin-linux-gtk-x86_64
-            extract: tar xzf *.tar.gz
-            launcher: ./jdtls
-            config: ./configuration
-          - runner: ubuntu-24.04-arm
-            artifact: karellen-jdtls-kotlin-linux-gtk-aarch64
-            extract: tar xzf *.tar.gz
-            launcher: ./jdtls
-            config: ./configuration
-          - runner: macos-15-intel
-            artifact: karellen-jdtls-kotlin-macosx-cocoa-x86_64
-            extract: tar xzf *.tar.gz
-            launcher: ./Eclipse.app/Contents/MacOS/jdtls
-            config: ./Eclipse.app/Contents/Eclipse/configuration
-          - runner: macos-15
-            artifact: karellen-jdtls-kotlin-macosx-cocoa-aarch64
-            extract: tar xzf *.tar.gz
-            launcher: ./Eclipse.app/Contents/MacOS/jdtls
-            config: ./Eclipse.app/Contents/Eclipse/configuration
-          - runner: windows-latest
-            artifact: karellen-jdtls-kotlin-win32-x86_64
-            extract: unzip -q *.zip
-            launcher: ./jdtls.exe
-            config: ./configuration
-    runs-on: ${{ matrix.runner }}
-    name: integration-test (${{ matrix.artifact }})
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ matrix.artifact }}
-          path: archive
-
-      - name: Extract
-        working-directory: archive
-        run: ${{ matrix.extract }}
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@v5
-        with:
-          distribution: zulu
-          java-version: '25'
-
-      - name: Verify launcher exists
-        working-directory: archive
-        shell: bash
-        run: |
-          ls -la "${{ matrix.launcher }}"
-          file "${{ matrix.launcher }}" || true
-
-      - name: Smoke test — LSP initialize
-        working-directory: archive
-        shell: bash
-        run: |
-          WORKSPACE=$(mktemp -d)
-
-          # Build LSP request file: initialize + exit + shutdown
-          INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}'
-          EXIT='{"jsonrpc":"2.0","method":"exit"}'
-
-          {
-            printf "Content-Length: ${#INIT}\r\n\r\n%s" "$INIT"
-            printf "Content-Length: ${#EXIT}\r\n\r\n%s" "$EXIT"
-          } > request.bin
-
-          # Run jdtls with request file as stdin; it will process initialize then exit
-          "${{ matrix.launcher }}" \
-            -configuration "${{ matrix.config }}" \
-            -data "$WORKSPACE" \
-            --add-modules=ALL-SYSTEM \
-            --add-opens java.base/java.util=ALL-UNNAMED \
-            --add-opens java.base/java.lang=ALL-UNNAMED \
-            <request.bin >stdout.log 2>stderr.log || true
-
-          echo "=== stderr (last 20 lines) ==="
-          tail -20 stderr.log
-          echo "=== stdout (first 20 lines) ==="
-          head -20 stdout.log
-
-          # Check for a valid LSP response
-          if grep -q '"jsonrpc"' stdout.log; then
-            echo "LSP initialize response received"
-          else
-            echo "ERROR: No LSP response received"
-            exit 1
-          fi
-
   release:
-    needs: [build, integration-test]
+    needs: build
     if: needs.build.outputs.release_version != ''
     runs-on: ubuntu-latest
     steps:
@@ -346,11 +138,10 @@ jobs:
           git push --atomic origin master "v${RELEASE_VERSION}"
 
   publish:
-    needs: [build, integration-test, release]
+    needs: [build, release]
     if: >-
       always() && !cancelled()
       && needs.build.result == 'success'
-      && needs.integration-test.result == 'success'
       && github.event_name == 'push'
       && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
@@ -365,45 +156,42 @@ jobs:
           java-version: '25'
           server-id: github
 
-      - name: Download Maven repository
-        uses: actions/download-artifact@v8
+      - name: Cache Maven repository
+        uses: actions/cache@v5
         with:
-          name: m2-repository
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-      - name: Restore Maven repository
-        run: mkdir -p ~/.m2/repository && tar xzf m2-repo.tar.gz -C ~/.m2/repository
+      - name: Resolve fork artifacts from GitHub Packages
+        run: |
+          mvn dependency:resolve -B -q \
+            -DremoteRepositories=github-jdtls::default::https://maven.pkg.github.com/karellen/karellen-jdtls \
+            || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy to GitHub Packages
         run: mvn deploy -DskipTests -pl '!co.karellen.jdtls.kotlin.tests,!co.karellen.jdtls.kotlin.coverage' -B
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download all platform archives
+      - name: Trigger karellen-jdtls build (release)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: dist/*
-          generate_release_notes: true
-
-  cleanup:
-    needs: [build, integration-test, release, publish]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete m2-repository artifact
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
-            --jq '.artifacts[] | select(.name == "m2-repository") | .id')
-          if [ -n "$ARTIFACT_ID" ]; then
-            gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID
-          fi
+          gh api repos/karellen/karellen-jdtls/dispatches \
+            -f event_type=kotlin-plugin-release \
+            -f 'client_payload[tag]'="${GITHUB_REF_NAME}" \
+            -f 'client_payload[run_id]'="${{ github.run_id }}"
+
+      - name: Trigger karellen-jdtls build (snapshot)
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          gh api repos/karellen/karellen-jdtls/dispatches \
+            -f event_type=kotlin-plugin-snapshot \
+            -f 'client_payload[run_id]'="${{ github.run_id }}"
