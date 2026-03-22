@@ -23,6 +23,8 @@
    <plugins>
       <!-- Karellen Kotlin search participant -->
       <plugin id="co.karellen.jdtls.kotlin"/>
+      <!-- ANTLR4 runtime -->
+      <plugin id="org.antlr.antlr4-runtime"/>
       <!-- jdtls core -->
       <plugin id="org.eclipse.jdt.ls.core"/>
       <plugin id="org.eclipse.jdt.ls.filesystem"/>

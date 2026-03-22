@@ -21,19 +21,14 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.jdt.core.IJavaProject;
-import org.eclipse.jdt.core.search.IJavaSearchConstants;
-import org.eclipse.jdt.core.search.IJavaSearchScope;
-import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchParticipant;
-import org.eclipse.jdt.core.search.SearchPattern;
-import org.eclipse.jdt.core.search.SearchRequestor;
 import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -129,13 +124,10 @@ public class KotlinSearchParticipantIntegrationTest {
 	}
 
 	// ---- Indexing Pipeline Tests ----
-	// Verify indexing by searching for the indexed types. This tests the full
-	// pipeline (delta processing → indexDocument → index storage) without
-	// requiring test instrumentation on the production class.
 
 	@Test
 	public void testIndexingTriggeredForKtFile() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/Hello.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/Hello.kt", "class Hello");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> matches = searchKotlinTypes("Hello");
@@ -145,7 +137,7 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testIndexingTriggeredForKtsFile() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/Script.kts", "");
+		TestHelpers.createFile("/KotlinTest/src/Script.kts", "class Script");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> matches = searchKotlinTypes("Script");
@@ -155,8 +147,8 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testIndexingTriggeredForMultipleKtFiles() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/Alpha.kt", "");
-		TestHelpers.createFile("/KotlinTest/src/Beta.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/Alpha.kt", "class Alpha\nclass AlphaHelper");
+		TestHelpers.createFile("/KotlinTest/src/Beta.kt", "class Beta\ninterface BetaService");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> alphaMatches = searchKotlinTypes("Alpha");
@@ -170,7 +162,8 @@ public class KotlinSearchParticipantIntegrationTest {
 	@Test
 	public void testIndexingInSubPackage() throws CoreException {
 		TestHelpers.createFolder("/KotlinTest/src/pkg");
-		TestHelpers.createFile("/KotlinTest/src/pkg/InPackage.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/pkg/InPackage.kt",
+				"package pkg\n\nclass InPackage");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> matches = searchKotlinTypes("InPackage");
@@ -180,11 +173,11 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testKtFileDeletion() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/ToDelete.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/ToDelete.kt", "class ToDelete");
 		TestHelpers.waitUntilIndexesReady();
 
 		// delete the file — should not throw
-		TestHelpers.createFile("/KotlinTest/src/ToDelete.kt", "").delete(true, null);
+		TestHelpers.createFile("/KotlinTest/src/ToDelete.kt", "class ToDelete").delete(true, null);
 		TestHelpers.waitUntilIndexesReady();
 		// If we get here without an exception, the delta processor handled removal correctly
 	}
@@ -194,8 +187,6 @@ public class KotlinSearchParticipantIntegrationTest {
 		TestHelpers.createFile("/KotlinTest/src/Regular.java", "public class Regular {}");
 		TestHelpers.waitUntilIndexesReady();
 
-		// Search for Regular — should find it via the default Java participant,
-		// but no match should have a .kt resource (proving our participant wasn't invoked)
 		List<SearchMatch> matches = searchAllTypes("Regular");
 		for (SearchMatch match : matches) {
 			IResource resource = match.getResource();
@@ -212,7 +203,7 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testSearchFindsKtTypeDeclaration() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/Hello.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/Hello.kt", "class Hello {\n    fun greet() {}\n}");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> matches = searchKotlinTypes("Hello");
@@ -225,8 +216,10 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testSearchFindsMultipleKtTypes() throws CoreException {
-		TestHelpers.createFile("/KotlinTest/src/Foo.kt", "");
-		TestHelpers.createFile("/KotlinTest/src/Bar.kt", "");
+		TestHelpers.createFile("/KotlinTest/src/Foo.kt",
+				"class Foo {\n    val x: Int = 1\n    val y: String = \"hello\"\n}");
+		TestHelpers.createFile("/KotlinTest/src/Bar.kt",
+				"interface Bar {\n    fun doSomething()\n    fun doMore()\n}");
 		TestHelpers.waitUntilIndexesReady();
 
 		List<SearchMatch> fooMatches = searchKotlinTypes("Foo");
@@ -235,6 +228,44 @@ public class KotlinSearchParticipantIntegrationTest {
 				"Should find Foo type from .kt file");
 		assertTrue(barMatches.size() >= 1,
 				"Should find Bar type from .kt file");
+	}
+
+	// ---- ANTLR Parser Integration Tests ----
+
+	@Test
+	public void testIndexingWithPackageDeclaration() throws CoreException {
+		TestHelpers.createFolder("/KotlinTest/src/com/example");
+		TestHelpers.createFile("/KotlinTest/src/com/example/MyClass.kt",
+				"package com.example\n\nclass MyClass {\n    fun hello(): String = \"world\"\n}");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = searchKotlinTypes("MyClass");
+		assertTrue(matches.size() >= 1,
+				"Should find MyClass type with package declaration");
+	}
+
+	@Test
+	public void testIndexingWithInheritance() throws CoreException {
+		TestHelpers.createFile("/KotlinTest/src/Base.kt",
+				"open class Base {\n    open fun doIt() {}\n}");
+		TestHelpers.createFile("/KotlinTest/src/Derived.kt",
+				"class Derived : Base() {\n    override fun doIt() {}\n}");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> baseMatches = searchKotlinTypes("Base");
+		List<SearchMatch> derivedMatches = searchKotlinTypes("Derived");
+		assertTrue(baseMatches.size() >= 1, "Should find Base type");
+		assertTrue(derivedMatches.size() >= 1, "Should find Derived type");
+	}
+
+	@Test
+	public void testIndexingEmptyFileStillWorks() throws CoreException {
+		TestHelpers.createFile("/KotlinTest/src/Empty.kt", "");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = searchKotlinTypes("Empty");
+		assertTrue(matches.size() >= 1,
+				"Empty file should still produce a type from path-based fallback");
 	}
 
 	// ---- Lifecycle Tests ----
@@ -250,41 +281,176 @@ public class KotlinSearchParticipantIntegrationTest {
 		assertNotSame(before, after, "After reset, a new instance should be created");
 	}
 
+	@Test
+	public void testKtsScriptLevelDeclarationsIndexed()
+			throws CoreException {
+		// .kts files with top-level declarations should be indexed
+		// using the script() parser entry point.
+		TestHelpers.createFile("/KotlinTest/src/script.kts",
+				"class ScriptGreeter {\n"
+				+ "    fun greet(): String = \"Hello\"\n"
+				+ "}\n"
+				+ "\n"
+				+ "class ScriptHelper {\n"
+				+ "    fun assist(): String = \"Helping\"\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> greeterTypes = searchKotlinTypes(
+				"ScriptGreeter");
+		assertTrue(greeterTypes.size() >= 1,
+				"Script-level class 'ScriptGreeter' should be "
+						+ "indexed. Found " + greeterTypes.size());
+
+		List<SearchMatch> helperTypes = searchKotlinTypes(
+				"ScriptHelper");
+		assertTrue(helperTypes.size() >= 1,
+				"Script-level class 'ScriptHelper' should be "
+						+ "indexed. Found " + helperTypes.size());
+	}
+
+	@Test
+	public void testKtsScriptExpressionReferencesIndexed()
+			throws CoreException {
+		// .kts files should also index expression references (REF,
+		// METHOD_REF, CONSTRUCTOR_REF) from the script body.
+		TestHelpers.createFile("/KotlinTest/src/build.kts",
+				"class Target {\n"
+				+ "    fun execute(): String = \"done\"\n"
+				+ "}\n"
+				+ "\n"
+				+ "val t = Target()\n"
+				+ "t.execute()\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// TYPE_DECL should work (already proven)
+		List<SearchMatch> targetTypes = searchKotlinTypes("Target");
+		assertTrue(targetTypes.size() >= 1,
+				"Script class 'Target' should be indexed. Found "
+						+ targetTypes.size());
+
+		// TYPE REF should also work — Target() constructor call
+		// emits CONSTRUCTOR_REF + REF
+		List<SearchMatch> refs = TestHelpers.searchTypeReferences(
+				"Target", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertTrue(ktRefs.size() >= 1,
+				"Script-level 'Target()' constructor call should "
+						+ "produce a type reference. Found "
+						+ ktRefs.size());
+	}
+
+	@Test
+	public void testKtsScriptLevelClassDeclaration()
+			throws CoreException {
+		// Existing behavior: class declarations in .kts files should
+		// still work after the script parsing changes.
+		TestHelpers.createFile("/KotlinTest/src/model.kts",
+				"class Model {\n"
+				+ "    val name: String = \"test\"\n"
+				+ "}\n"
+				+ "\n"
+				+ "class Helper {\n"
+				+ "    fun assist(): String = \"helping\"\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> types = searchKotlinTypes("Model");
+		assertTrue(types.size() >= 1,
+				"Script-level class 'Model' should be found. Found "
+						+ types.size());
+
+		List<SearchMatch> helpers = searchKotlinTypes("Helper");
+		assertTrue(helpers.size() >= 1,
+				"Script-level class 'Helper' should be found. Found "
+						+ helpers.size());
+	}
+
+	@Test
+	public void testImportAliasTypeReferenceSearch()
+			throws CoreException {
+		// Import aliases should be resolved during indexing:
+		// both the alias name and the original name are indexed.
+		// Searching for the original type should find alias usages.
+		TestHelpers.createFolder("/KotlinTest/src/aliasref");
+		TestHelpers.createFile(
+				"/KotlinTest/src/aliasref/Original.kt",
+				"package aliasref\n"
+				+ "\n"
+				+ "class Original {\n"
+				+ "    fun method() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/KotlinTest/src/aliasref/Consumer.kt",
+				"package aliasref\n"
+				+ "\n"
+				+ "import aliasref.Original as Alias\n"
+				+ "\n"
+				+ "fun useAlias() {\n"
+				+ "    val x: Alias = Alias()\n"
+				+ "    x.method()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs = TestHelpers.searchTypeReferences(
+				"Original", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		// Consumer.kt uses "Alias" but the indexer emits REF for both
+		// "Alias" and "Original", so searching for "Original" finds it
+		assertTrue(ktRefs.size() >= 1,
+				"Searching for 'Original' should find aliased "
+						+ "references via dual index emission. Found "
+						+ ktRefs.size());
+	}
+
+	@Test
+	public void testIsExpressionTypeReferenceIndexed()
+			throws CoreException {
+		// "is" type checks should index the type reference
+		TestHelpers.createFolder("/KotlinTest/src/ischeck");
+		TestHelpers.createFile(
+				"/KotlinTest/src/ischeck/Animal.kt",
+				"package ischeck\n"
+				+ "\n"
+				+ "open class Animal\n"
+				+ "class Dog : Animal()\n"
+				+ "class Cat : Animal()\n"
+				+ "\n"
+				+ "fun checkType(obj: Any) {\n"
+				+ "    if (obj is Dog) {\n"
+				+ "        println(\"dog\")\n"
+				+ "    } else if (obj !is Cat) {\n"
+				+ "        println(\"not cat\")\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> dogRefs = TestHelpers.searchTypeReferences(
+				"Dog", project);
+		List<SearchMatch> ktDogRefs = TestHelpers.filterKotlinMatches(
+				dogRefs);
+		assertTrue(ktDogRefs.size() >= 1,
+				"'is Dog' should be indexed as a type reference. "
+						+ "Found " + ktDogRefs.size());
+
+		List<SearchMatch> catRefs = TestHelpers.searchTypeReferences(
+				"Cat", project);
+		List<SearchMatch> ktCatRefs = TestHelpers.filterKotlinMatches(
+				catRefs);
+		assertTrue(ktCatRefs.size() >= 1,
+				"'!is Cat' should be indexed as a type reference. "
+						+ "Found " + ktCatRefs.size());
+	}
+
 	// ---- Helpers ----
 
 	private List<SearchMatch> searchKotlinTypes(String typeName) throws CoreException {
-		List<SearchMatch> allMatches = searchAllTypes(typeName);
-		return allMatches.stream()
-				.filter(m -> m.getResource() != null
-						&& (m.getResource().getName().endsWith(".kt")
-								|| m.getResource().getName().endsWith(".kts")))
-				.toList();
+		return TestHelpers.searchKotlinTypes(typeName, project);
 	}
 
 	private List<SearchMatch> searchAllTypes(String typeName) throws CoreException {
-		SearchPattern pattern = SearchPattern.createPattern(
-				typeName,
-				IJavaSearchConstants.TYPE,
-				IJavaSearchConstants.DECLARATIONS,
-				SearchPattern.R_EXACT_MATCH);
-		IJavaSearchScope scope = SearchEngine.createJavaSearchScope(
-				new IJavaProject[] { project });
-
-		List<SearchMatch> matches = new ArrayList<>();
-		SearchRequestor requestor = new SearchRequestor() {
-			@Override
-			public void acceptSearchMatch(SearchMatch match) {
-				matches.add(match);
-			}
-		};
-
-		new SearchEngine().search(
-				pattern,
-				SearchEngine.getSearchParticipants(),
-				scope,
-				requestor,
-				null);
-
-		return matches;
+		return TestHelpers.searchAllTypes(typeName, project);
 	}
 }

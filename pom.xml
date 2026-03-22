@@ -19,12 +19,14 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<tycho-version>5.0.2</tycho-version>
 		<tycho.localArtifacts>consider</tycho.localArtifacts>
+		<jacoco.version>0.8.14</jacoco.version>
 	</properties>
 	<modules>
 		<module>co.karellen.jdtls.kotlin.target</module>
 		<module>co.karellen.jdtls.kotlin</module>
 		<module>co.karellen.jdtls.kotlin.tests</module>
 		<module>co.karellen.jdtls.kotlin.product</module>
+		<module>co.karellen.jdtls.kotlin.coverage</module>
 	</modules>
 	<distributionManagement>
 		<repository>
@@ -39,6 +41,11 @@
 	<build>
 		<pluginManagement>
 			<plugins>
+				<plugin>
+					<groupId>org.jacoco</groupId>
+					<artifactId>jacoco-maven-plugin</artifactId>
+					<version>${jacoco.version}</version>
+				</plugin>
 				<plugin>
 					<groupId>org.eclipse.tycho</groupId>
 					<artifactId>target-platform-configuration</artifactId>
@@ -88,6 +95,21 @@
 				<artifactId>tycho-maven-plugin</artifactId>
 				<version>${tycho-version}</version>
 				<extensions>true</extensions>
+			</plugin>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+						<configuration>
+							<propertyName>tycho.testArgLine</propertyName>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

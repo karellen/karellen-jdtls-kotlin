@@ -111,7 +111,11 @@ Full architecture, rationale, and implementation details:
 
 ## Current State
 
-Stub plugin with production-quality OSGi bundle structure. `KotlinSearchParticipant`
-emits hardcoded TYPE_DECL index entries derived from file paths (no actual Kotlin
-parsing yet). Product module produces a self-contained distribution (~48MB tar.gz)
-with native Eclipse launcher (`jdtls`), all jdtls bundles, and the Kotlin plugin.
+ANTLR4-based Kotlin parser with 7-phase pipeline: declaration extraction, symbol
+table, scope-based type resolution, overload resolution, lambda type propagation,
+smart cast narrowing, index emission, and IJavaElement resolution. All cross-language
+LSP features working: find references, go-to-definition, hover, call hierarchy, type
+hierarchy, document symbols, and code lens. 231 integration tests, 85% instruction /
+65% branch coverage. Product module produces a self-contained distribution (~48MB
+tar.gz) with native Eclipse launcher (`jdtls`), all jdtls bundles, and the Kotlin
+plugin.
