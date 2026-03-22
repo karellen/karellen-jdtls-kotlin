@@ -25,7 +25,7 @@
 		<module>co.karellen.jdtls.kotlin.target</module>
 		<module>co.karellen.jdtls.kotlin</module>
 		<module>co.karellen.jdtls.kotlin.tests</module>
-		<module>co.karellen.jdtls.kotlin.product</module>
+
 		<module>co.karellen.jdtls.kotlin.coverage</module>
 	</modules>
 	<distributionManagement>
