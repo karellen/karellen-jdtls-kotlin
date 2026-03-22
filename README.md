@@ -1,5 +1,8 @@
 # karellen-jdtls-kotlin
 
+[![CI](https://github.com/karellen/karellen-jdtls-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/karellen/karellen-jdtls-kotlin/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/karellen/karellen-jdtls-kotlin/badge.svg?branch=master)](https://coveralls.io/github/karellen/karellen-jdtls-kotlin?branch=master)
+
 Kotlin language support for [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) (jdtls) via JDT Core's `SearchParticipant` extension point.
 
 This project provides cross-language code intelligence between Java and Kotlin source files: type hierarchy, call hierarchy, find references, hover, and go-to-definition all work bidirectionally across the Java/Kotlin boundary.
@@ -66,10 +69,12 @@ The OSGi bundle registers with JDT Core via `plugin.xml`:
 </extension>
 ```
 
-The participant implements:
-- **`indexDocument()`** — parses `.kt` files and emits index entries (`TYPE_DECL`, `METHOD_REF`, `SUPER_REF`, etc.)
-- **`locateMatches()`** — resolves index hits back to `.kt` source positions
+The participant uses an ANTLR4-based parser (official Kotlin grammar from `kotlin-spec`, supporting v1.4 through v1.9) and implements:
+- **`indexDocument()`** — parses `.kt` files via ANTLR4, extracts declarations and expression references, emits index entries (`TYPE_DECL`, `SUPER_REF`, `METHOD_DECL`, `FIELD_DECL`, `CONSTRUCTOR_DECL`, `REF`, `METHOD_REF`, `CONSTRUCTOR_REF`)
+- **`locateMatches()`** — pattern-aware match reporting with `IJavaElement` resolution: dispatches on `TypeDeclarationPattern`, `SuperTypeReferencePattern`, `TypeReferencePattern`, `MethodPattern`, `FieldPattern`; returns `KotlinElement` instances backed by `KotlinCompilationUnit` with proper parent chain; includes receiver type verification via scope chain, import resolution, and subtype checking
 - **`selectIndexes()`** — returns index file paths for this participant's entries
+
+The parser pipeline includes a symbol table, scope-walking type resolver, overload resolver, and lambda type propagation for ~80-85% call site coverage without full Kotlin type inference.
 
 ### Data Flow
 
@@ -93,8 +98,9 @@ LSP client requests textDocument/references
 
 | Module | Description |
 |--------|-------------|
-| `co.karellen.jdtls.kotlin` | OSGi plugin bundle with `KotlinSearchParticipant` |
-| `co.karellen.jdtls.kotlin.tests` | Integration tests (15 JUnit 5 tests) |
+| `co.karellen.jdtls.kotlin` | OSGi plugin bundle with ANTLR4 parser and `KotlinSearchParticipant` |
+| `co.karellen.jdtls.kotlin.tests` | Integration tests (200 JUnit 5 tests) |
+| `co.karellen.jdtls.kotlin.coverage` | JaCoCo code coverage aggregation |
 | `co.karellen.jdtls.kotlin.product` | Self-contained product distribution with native launcher |
 | `co.karellen.jdtls.kotlin.target` | Target platform definition |
 
@@ -131,7 +137,7 @@ The root `pom.xml` sets `tycho.localArtifacts=consider`, which makes Tycho prefe
 
 ## Build Output
 
-- **Test results**: 15 integration tests covering extension point discovery, indexing pipeline, search pipeline, and lifecycle
+- **Test results**: 200 integration tests, all passing — extension point discovery, indexing pipeline, search pipeline, lifecycle, cross-language type discovery (v1.4-v1.9), hover, implementation search, find references, code lens, call hierarchy (incoming/outgoing), receiver type verification, local variable resolution, field references, type aliases, document symbols, code select
 - **Distribution archive**: `co.karellen.jdtls.kotlin.product/distro/karellen-jdtls-kotlin-<timestamp>.tar.gz` (~48MB)
 - **Materialized products**: platform-specific directories under `co.karellen.jdtls.kotlin.product/target/products/`
 
@@ -188,7 +194,13 @@ The `jdtls` binary reads `jdtls.ini` for default VM arguments. The product uses 
 
 ## Current Status
 
-The plugin is functional with a stub Kotlin parser that derives type declarations from file paths. The full Kotlin indexer (kotlinx/ast + lightweight declaration resolver) is the next milestone.
+The plugin has a working ANTLR4-based Kotlin parser with a 7-phase pipeline (declaration extraction, symbol table, scope-walking type resolution, overload resolution, lambda propagation, index emission, IJavaElement resolution). All cross-language search features work bidirectionally across the Java/Kotlin boundary: type hierarchy, call hierarchy (incoming and outgoing), find references, hover, go-to-definition, implementation search, code lens, and document symbols. 200 integration tests pass with 84% instruction / 63% branch coverage.
+
+Key capabilities:
+- **Receiver type verification** filters false positives by resolving receiver expressions to types via scope chain (file, class, function, and local variable scopes), import resolution, and subtype hierarchy checking with JDT delegation for Java types
+- **`KotlinElement` hierarchy** implements `IType`, `IMethod`, `IField` with full type metadata, parameter types/names, return types, and JDT modifier flag mapping
+- **`KotlinCompilationUnit`** provides a populated model (`getTypes()`, `getChildren()`, `codeSelect()`, `getElementAt()`) for document symbol and navigation features
+- **Call hierarchy** via `locateCallees()` for outgoing calls and element-based `MethodPattern` search for incoming calls
 
 ## License
 

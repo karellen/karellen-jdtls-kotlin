@@ -16,7 +16,12 @@
 package co.karellen.jdtls.kotlin.tests;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
@@ -26,14 +31,23 @@ import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.jdt.internal.core.search.indexing.IndexManager;
 import org.eclipse.jdt.core.IClasspathEntry;
+import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IPackageFragment;
+import org.eclipse.jdt.core.IPackageFragmentRoot;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.search.IJavaSearchConstants;
+import org.eclipse.jdt.core.search.IJavaSearchScope;
 import org.eclipse.jdt.core.search.SearchEngine;
+import org.eclipse.jdt.core.search.SearchMatch;
 import org.eclipse.jdt.core.search.SearchPattern;
+import org.eclipse.jdt.core.search.SearchRequestor;
 import org.eclipse.jdt.core.search.TypeNameRequestor;
 import org.eclipse.jdt.internal.core.JavaModelManager;
+import org.osgi.framework.Bundle;
 
 /**
  * Utility class for test workspace setup. Avoids depending on JDT Core's
@@ -74,6 +88,60 @@ public final class TestHelpers {
 		return javaProject;
 	}
 
+	/**
+	 * Creates a Java project with source folders AND the JRE container on
+	 * the classpath. Use this when tests need JDT type hierarchy APIs
+	 * (e.g., IType.newSupertypeHierarchy) to resolve Java types.
+	 * Note: JRE indexing adds significant time (~30s per project).
+	 */
+	public static IJavaProject createJavaProjectWithJRE(String name, String... srcFolders) throws CoreException {
+		IJavaProject javaProject = createJavaProject(name, srcFolders);
+		IClasspathEntry[] existing = javaProject.getRawClasspath();
+		IClasspathEntry[] withJre = new IClasspathEntry[existing.length + 1];
+		System.arraycopy(existing, 0, withJre, 0, existing.length);
+		withJre[existing.length] = JavaCore.newContainerEntry(
+				IPath.fromPortableString(
+						"org.eclipse.jdt.launching.JRE_CONTAINER"));
+		javaProject.setRawClasspath(withJre, null);
+		return javaProject;
+	}
+
+	public static IFile getFile(String workspacePath) {
+		IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
+		return root.getFile(IPath.fromPortableString(workspacePath));
+	}
+
+	public static List<SearchMatch> filterKotlinMatches(
+			List<SearchMatch> matches) {
+		return matches.stream()
+				.filter(m -> {
+					if (m.getResource() == null) return false;
+					String name = m.getResource().getName();
+					return name.endsWith(".kt")
+							|| name.endsWith(".kts");
+				})
+				.toList();
+	}
+
+	public static ICompilationUnit getJavaCompilationUnit(
+			IJavaProject project,
+			String packageName, String cuName) throws CoreException {
+		for (IPackageFragmentRoot root : project
+				.getPackageFragmentRoots()) {
+			if (root.getKind() == IPackageFragmentRoot.K_SOURCE) {
+				IPackageFragment pkg = root.getPackageFragment(
+						packageName);
+				if (pkg != null && pkg.exists()) {
+					ICompilationUnit cu = pkg.getCompilationUnit(cuName);
+					if (cu != null && cu.exists()) {
+						return cu;
+					}
+				}
+			}
+		}
+		return null;
+	}
+
 	public static IFile createFile(String workspacePath, String content) throws CoreException {
 		IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
 		IFile file = root.getFile(IPath.fromPortableString(workspacePath));
@@ -107,29 +175,276 @@ public final class TestHelpers {
 		}
 	}
 
+	/**
+	 * Waits for workspace auto-build to complete, then waits for
+	 * search indexes. Use this when the test needs compiled Java
+	 * types (e.g., for IType.newSupertypeHierarchy()).
+	 */
+	public static void waitForBuildAndIndexes() {
+		try {
+			org.eclipse.core.runtime.jobs.Job.getJobManager().join(
+					ResourcesPlugin.FAMILY_AUTO_BUILD, null);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		waitUntilIndexesReady();
+	}
+
 	public static void waitUntilIndexesReady() {
 		SearchEngine engine = new SearchEngine();
+		IndexManager indexManager =
+				JavaModelManager.getIndexManager();
 		try {
-			JavaModelManager.getIndexManager().waitForIndex(false, null);
+			// Explicitly trigger indexing for all .kt/.kts files
+			// in case DeltaProcessor hasn't fired yet. This is
+			// deterministic — no sleep/polling needed.
+			ensureKotlinFilesIndexed(indexManager);
+
+			indexManager.waitForIndex(false, null);
 			engine.searchAllTypeNames(
 					null,
 					SearchPattern.R_EXACT_MATCH,
 					"!@$#!@".toCharArray(),
-					SearchPattern.R_PATTERN_MATCH | SearchPattern.R_CASE_SENSITIVE,
+					SearchPattern.R_PATTERN_MATCH
+							| SearchPattern.R_CASE_SENSITIVE,
 					IJavaSearchConstants.CLASS,
 					SearchEngine.createWorkspaceScope(),
 					new TypeNameRequestor() {
 						@Override
-						public void acceptType(int modifiers, char[] packageName,
-								char[] simpleTypeName, char[][] enclosingTypeNames,
+						public void acceptType(int modifiers,
+								char[] packageName,
+								char[] simpleTypeName,
+								char[][] enclosingTypeNames,
 								String path) {
 						}
 					},
-					IJavaSearchConstants.WAIT_UNTIL_READY_TO_SEARCH,
+					IJavaSearchConstants
+							.WAIT_UNTIL_READY_TO_SEARCH,
 					null);
+			indexManager.waitForIndex(false, null);
 		} catch (CoreException e) {
-			throw new RuntimeException("Failed waiting for indexes", e);
+			throw new RuntimeException(
+					"Failed waiting for indexes", e);
 		}
+	}
+
+	private static void ensureKotlinFilesIndexed(
+			IndexManager indexManager) {
+		try {
+			IWorkspaceRoot root =
+					ResourcesPlugin.getWorkspace().getRoot();
+			for (org.eclipse.core.resources.IProject project :
+					root.getProjects()) {
+				if (!project.isOpen()) {
+					continue;
+				}
+				project.accept(resource -> {
+					if (resource instanceof IFile file) {
+						String name = file.getName();
+						if (name.endsWith(".kt")
+								|| name.endsWith(".kts")) {
+							indexManager.addDerivedSource(file,
+									file.getProject().getFullPath());
+						}
+					}
+					return true;
+				});
+			}
+		} catch (CoreException e) {
+			// Non-fatal: delta processing may handle it
+		}
+	}
+
+	/**
+	 * Loads the content of a resource file from the test bundle.
+	 */
+	public static String loadResource(String resourcePath) {
+		Bundle bundle = Platform.getBundle("co.karellen.jdtls.kotlin.tests");
+		URL url = bundle.getEntry(resourcePath);
+		if (url == null) {
+			throw new RuntimeException("Resource not found: " + resourcePath);
+		}
+		try (InputStream is = url.openStream()) {
+			return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new RuntimeException("Failed to read resource: " + resourcePath, e);
+		}
+	}
+
+	/**
+	 * Creates a workspace file from a test bundle resource.
+	 */
+	public static IFile createFileFromResource(String workspacePath, String resourcePath) throws CoreException {
+		return createFile(workspacePath, loadResource(resourcePath));
+	}
+
+	/**
+	 * Searches for all type declarations matching the given name using all
+	 * search participants (including contributed ones like Kotlin).
+	 */
+	public static List<SearchMatch> searchAllTypes(String typeName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				typeName,
+				IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for type declarations matching the given name, returning only
+	 * matches from .kt or .kts files.
+	 */
+	public static List<SearchMatch> searchKotlinTypes(String typeName, IJavaProject project) throws CoreException {
+		List<SearchMatch> allMatches = searchAllTypes(typeName, project);
+		return allMatches.stream()
+				.filter(m -> m.getResource() != null
+						&& (m.getResource().getName().endsWith(".kt")
+								|| m.getResource().getName().endsWith(".kts")))
+				.toList();
+	}
+
+	/**
+	 * Searches for references to a type with the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchTypeReferences(String typeName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				typeName,
+				IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.REFERENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for references to a method with the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchMethodReferences(String methodName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				methodName,
+				IJavaSearchConstants.METHOD,
+				IJavaSearchConstants.REFERENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for implementors of a type with the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchImplementors(String typeName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				typeName,
+				IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.IMPLEMENTORS,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for method declarations matching the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchMethodDeclarations(String methodName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				methodName,
+				IJavaSearchConstants.METHOD,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for field declarations matching the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchFieldDeclarations(String fieldName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				fieldName,
+				IJavaSearchConstants.FIELD,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for field references matching the given name using all
+	 * search participants.
+	 */
+	public static List<SearchMatch> searchFieldReferences(String fieldName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				fieldName,
+				IJavaSearchConstants.FIELD,
+				IJavaSearchConstants.REFERENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for all occurrences (declarations + references) of a field
+	 * using all search participants.
+	 */
+	public static List<SearchMatch> searchFieldAllOccurrences(String fieldName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				fieldName,
+				IJavaSearchConstants.FIELD,
+				IJavaSearchConstants.ALL_OCCURRENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for qualified method references (e.g., "TypeName.methodName")
+	 * using all search participants. This sets the declaringSimpleName on
+	 * the MethodPattern, enabling receiver type verification.
+	 */
+	public static List<SearchMatch> searchQualifiedMethodReferences(String qualifiedName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				qualifiedName,
+				IJavaSearchConstants.METHOD,
+				IJavaSearchConstants.REFERENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Searches for all occurrences (declarations + references) of a method
+	 * using all search participants.
+	 */
+	public static List<SearchMatch> searchMethodAllOccurrences(String methodName, IJavaProject project) throws CoreException {
+		SearchPattern pattern = SearchPattern.createPattern(
+				methodName,
+				IJavaSearchConstants.METHOD,
+				IJavaSearchConstants.ALL_OCCURRENCES,
+				SearchPattern.R_EXACT_MATCH);
+		return executeSearch(pattern, project);
+	}
+
+	/**
+	 * Executes a search using all search participants (default + contributed).
+	 */
+	public static List<SearchMatch> executeSearch(SearchPattern pattern, IJavaProject project) throws CoreException {
+		IJavaSearchScope scope = SearchEngine.createJavaSearchScope(
+				new IJavaProject[] { project });
+
+		List<SearchMatch> matches = new ArrayList<>();
+		SearchRequestor requestor = new SearchRequestor() {
+			@Override
+			public void acceptSearchMatch(SearchMatch match) {
+				matches.add(match);
+			}
+		};
+
+		new SearchEngine().search(
+				pattern,
+				SearchEngine.getSearchParticipants(),
+				scope,
+				requestor,
+				null);
+
+		return matches;
 	}
 
 	private static void createFolderRecursive(IFolder folder) throws CoreException {

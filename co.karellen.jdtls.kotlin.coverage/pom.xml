@@ -1,0 +1,53 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>co.karellen.jdtls.kotlin</groupId>
+		<artifactId>parent</artifactId>
+		<version>1.0.0-SNAPSHOT</version>
+	</parent>
+	<artifactId>co.karellen.jdtls.kotlin.coverage</artifactId>
+	<name>Karellen JDTLS Kotlin :: Coverage Report</name>
+	<packaging>pom</packaging>
+	<dependencies>
+		<dependency>
+			<groupId>co.karellen.jdtls.kotlin</groupId>
+			<artifactId>co.karellen.jdtls.kotlin</artifactId>
+			<version>${project.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>co.karellen.jdtls.kotlin</groupId>
+			<artifactId>co.karellen.jdtls.kotlin.tests</artifactId>
+			<version>${project.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>report-aggregate</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>report-aggregate</goal>
+						</goals>
+						<configuration>
+							<outputDirectory>${project.build.directory}/site/jacoco</outputDirectory>
+							<includes>
+								<include>co/karellen/jdtls/kotlin/search/*</include>
+							</includes>
+							<formats>
+								<format>HTML</format>
+								<format>XML</format>
+								<format>CSV</format>
+							</formats>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>

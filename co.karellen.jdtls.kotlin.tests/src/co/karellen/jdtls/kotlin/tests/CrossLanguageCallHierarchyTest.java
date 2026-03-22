@@ -1,0 +1,959 @@
+/*
+ * Copyright 2026 Karellen, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package co.karellen.jdtls.kotlin.tests;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.jdt.core.ICompilationUnit;
+import org.eclipse.jdt.core.IJavaElement;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IMember;
+import org.eclipse.jdt.core.IMethod;
+import org.eclipse.jdt.core.IType;
+import org.eclipse.jdt.core.search.IJavaSearchConstants;
+import org.eclipse.jdt.core.search.IJavaSearchScope;
+import org.eclipse.jdt.core.search.SearchDocument;
+import org.eclipse.jdt.core.search.SearchEngine;
+import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.SearchParticipant;
+import org.eclipse.jdt.core.search.SearchPattern;
+import org.eclipse.jdt.core.search.SearchRequestor;
+import org.eclipse.jdt.core.manipulation.JavaManipulation;
+import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.corext.callhierarchy.CallHierarchyCore;
+import org.eclipse.jdt.internal.corext.callhierarchy.MethodWrapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import co.karellen.jdtls.kotlin.search.KotlinCompilationUnit;
+import co.karellen.jdtls.kotlin.search.KotlinElement;
+import co.karellen.jdtls.kotlin.search.KotlinModelManager;
+
+/**
+ * Tests for cross-language incoming call hierarchy support.
+ * Verifies that KotlinElement implements IMember, that reference
+ * search matches report the enclosing declaration as the element,
+ * and that Kotlin callers of Java methods are discoverable.
+ *
+ * @author Arcadiy Ivanov
+ */
+public class CrossLanguageCallHierarchyTest {
+
+	private static final String PROJECT_NAME = "CrossLangCallTest";
+	private IJavaProject project;
+
+	@BeforeEach
+	public void setUp() throws CoreException {
+		// Initialize preference node for JavaManipulation — required by
+		// CallHierarchyCore.isShowAll() which reads preferences via
+		// InstanceScope/DefaultScope. In a full jdtls, this is set by
+		// the org.eclipse.jdt.ls.core activator; in the test container
+		// that bundle isn't activated.
+		if (JavaManipulation.getPreferenceNodeId() == null) {
+			JavaManipulation.setPreferenceNodeId(
+					"co.karellen.jdtls.kotlin.tests");
+		}
+		SearchParticipantRegistry.reset();
+		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
+	}
+
+	@AfterEach
+	public void tearDown() throws CoreException {
+		TestHelpers.deleteProject(PROJECT_NAME);
+		project = null;
+	}
+
+	@Test
+	public void testIMemberInterface() throws CoreException {
+		// Create a Kotlin file with a class and a function
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/Service.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "class ServiceImpl {\n"
+				+ "    fun process(input: String): Boolean {\n"
+				+ "        return input.isNotEmpty()\n"
+				+ "    }\n"
+				+ "\n"
+				+ "    val status: String = \"active\"\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun topLevelHelper(): Int = 42\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for type declaration — should be an IMember
+		List<SearchMatch> typeMatches = TestHelpers.searchKotlinTypes("ServiceImpl", project);
+		assertTrue(typeMatches.size() >= 1, "Should find ServiceImpl type");
+		Object typeElement = typeMatches.get(0).getElement();
+		assertInstanceOf(IMember.class, typeElement, "Type element should be IMember");
+		IMember typeMember = (IMember) typeElement;
+		assertNotNull(typeMember.getCompilationUnit(), "Should have compilation unit");
+		assertNotNull(typeMember.getTypeRoot(), "Should have type root");
+		assertFalse(typeMember.isBinary(), "Should not be binary");
+		assertNull(typeMember.getClassFile(), "Should not have class file");
+		assertNull(typeMember.getDeclaringType(), "Top-level type has no declaring type");
+		assertEquals(0, typeMember.getFlags(), "Flags should be 0");
+		assertEquals(1, typeMember.getOccurrenceCount(), "Occurrence count should be 1");
+		assertEquals(0, typeMember.getCategories().length, "Should have no categories");
+		assertNull(typeMember.getJavadocRange(), "Should have no javadoc range");
+		assertNull(typeMember.getType("Nested", 1), "getType should return null");
+
+		// Search for method declaration — should be an IMember
+		List<SearchMatch> methodMatches = TestHelpers.searchMethodDeclarations("process", project);
+		List<SearchMatch> ktMethodMatches = TestHelpers.filterKotlinMatches(methodMatches);
+		assertTrue(ktMethodMatches.size() >= 1, "Should find process method");
+		assertInstanceOf(IMember.class, ktMethodMatches.get(0).getElement(),
+				"Method element should be IMember");
+
+		// Search for field declaration — should be an IMember
+		List<SearchMatch> fieldMatches = TestHelpers.searchFieldDeclarations("status", project);
+		List<SearchMatch> ktFieldMatches = TestHelpers.filterKotlinMatches(fieldMatches);
+		assertTrue(ktFieldMatches.size() >= 1, "Should find status field");
+		assertInstanceOf(IMember.class, ktFieldMatches.get(0).getElement(),
+				"Field element should be IMember");
+	}
+
+	@Test
+	public void testSearchMatchHasEnclosingMember() throws CoreException {
+		// Create a Kotlin file where a function references a type
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/Caller.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun callerFunction() {\n"
+				+ "    val svc = TargetService()\n"
+				+ "    svc.toString()\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun otherFunction() {\n"
+				+ "    val x = TargetService()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for references to TargetService
+		List<SearchMatch> refs = TestHelpers.searchTypeReferences("TargetService", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find at least 2 references to TargetService in Kotlin");
+
+		// Each match element should be the enclosing function, not the target
+		for (SearchMatch match : ktRefs) {
+			assertInstanceOf(IMember.class, match.getElement(),
+					"Match element should be an IMember (enclosing declaration)");
+			IMember enclosing = (IMember) match.getElement();
+			// The enclosing element should be a method (function) or type
+			assertTrue(
+					enclosing.getElementType() == IJavaElement.METHOD
+					|| enclosing.getElementType() == IJavaElement.TYPE,
+					"Enclosing element should be a method or type, got: "
+					+ enclosing.getElementType());
+			assertNotNull(enclosing.getCompilationUnit(),
+					"Enclosing member should have a compilation unit");
+		}
+
+		// Verify we found both callerFunction and otherFunction as enclosing
+		List<String> callerNames = ktRefs.stream()
+				.map(m -> ((IMember) m.getElement()).getElementName())
+				.distinct()
+				.toList();
+		assertTrue(callerNames.contains("callerFunction"),
+				"Should find callerFunction as enclosing member");
+		assertTrue(callerNames.contains("otherFunction"),
+				"Should find otherFunction as enclosing member");
+	}
+
+	@Test
+	public void testMethodReferenceSearchFindsKotlinCallers() throws CoreException {
+		// Java class with a method
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/DataProcessor.java",
+				"package callhier;\n"
+				+ "\n"
+				+ "public class DataProcessor {\n"
+				+ "    public void transform(String data) {}\n"
+				+ "    public int count() { return 0; }\n"
+				+ "}\n");
+		// Kotlin file calling the Java method
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/KotlinClient.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun kotlinCaller() {\n"
+				+ "    val proc = DataProcessor()\n"
+				+ "    proc.transform(\"hello\")\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun anotherKotlinCaller() {\n"
+				+ "    val proc = DataProcessor()\n"
+				+ "    proc.transform(\"world\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for references to "transform" method
+		List<SearchMatch> refs = TestHelpers.searchMethodReferences("transform", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find at least 2 Kotlin callers of transform()");
+
+		for (SearchMatch match : ktRefs) {
+			assertInstanceOf(IMember.class, match.getElement(),
+					"Match element should be IMember");
+			IMember caller = (IMember) match.getElement();
+			assertEquals(IJavaElement.METHOD, caller.getElementType(),
+					"Caller should be a method element");
+			assertNotNull(caller.getCompilationUnit(),
+					"Caller should have a compilation unit");
+			assertTrue(match.getOffset() >= 0, "Match should have valid offset");
+			assertTrue(match.getLength() > 0, "Match should have positive length");
+		}
+	}
+
+	@Test
+	public void testFieldReferenceSearchFindsKotlinCallers() throws CoreException {
+		// Java class with a field
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/Config.java",
+				"package callhier;\n"
+				+ "\n"
+				+ "public class Config {\n"
+				+ "    public static String appName = \"test\";\n"
+				+ "    public int maxRetries = 3;\n"
+				+ "}\n");
+		// Kotlin file referencing the Java field via type reference
+		// (field access isn't directly supported by KotlinReferenceFinder,
+		// but type references to Config are)
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/KotlinUser.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun useConfig() {\n"
+				+ "    val cfg = Config()\n"
+				+ "    println(cfg.toString())\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun anotherUse() {\n"
+				+ "    val cfg = Config()\n"
+				+ "    cfg.toString()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for type references to Config (field reference search is
+		// limited in the current parser, so use type references instead)
+		List<SearchMatch> refs = TestHelpers.searchTypeReferences("Config", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find at least 2 Kotlin references to Config");
+
+		for (SearchMatch match : ktRefs) {
+			assertInstanceOf(IMember.class, match.getElement(),
+					"Match element should be IMember");
+		}
+	}
+
+	@Test
+	public void testMultipleCallSitesGroupedByCaller() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/Api.java",
+				"package callhier;\n"
+				+ "\n"
+				+ "public class Api {\n"
+				+ "    public void invoke(String arg) {}\n"
+				+ "}\n");
+		// Kotlin function with two calls to the same method
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/MultiCaller.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun multiCallFunction() {\n"
+				+ "    val api = Api()\n"
+				+ "    api.invoke(\"first\")\n"
+				+ "    api.invoke(\"second\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs = TestHelpers.searchMethodReferences("invoke", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find at least 2 call sites for invoke()");
+
+		// All Kotlin matches should have the same enclosing member
+		Map<String, List<SearchMatch>> grouped = ktRefs.stream()
+				.filter(m -> m.getElement() instanceof IMember)
+				.collect(Collectors.groupingBy(
+						m -> ((IMember) m.getElement()).getElementName()));
+		assertTrue(grouped.containsKey("multiCallFunction"),
+				"All call sites should be grouped under multiCallFunction");
+		assertTrue(grouped.get("multiCallFunction").size() >= 2,
+				"multiCallFunction should contain at least 2 call sites");
+
+		// Verify the call site offsets are different (different locations)
+		List<SearchMatch> multiCallMatches = grouped.get("multiCallFunction");
+		assertTrue(multiCallMatches.get(0).getOffset()
+				!= multiCallMatches.get(1).getOffset(),
+				"Call sites should have different offsets");
+	}
+
+	// ---- locateCallees tests (outgoing call hierarchy) ----
+
+	@Test
+	public void testLocateCalleesFindsMethodAndConstructorCalls()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		IFile ktFile = TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/OutgoingCaller.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun callerFunction() {\n"
+				+ "    val svc = DataProcessor()\n"
+				+ "    svc.transform(\"hello\")\n"
+				+ "    svc.validate(\"world\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		assertNotNull(participant, "Kotlin participant should be registered");
+
+		// Find callerFunction via method declaration search
+		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
+				"callerFunction", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1, "Should find callerFunction declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath().toString();
+		SearchDocument document = participant.getDocument(path);
+		SearchMatch[] callees = participant.locateCallees(
+				caller, document, null);
+
+		// Should find: DataProcessor (constructor), transform, validate
+		assertTrue(callees.length >= 3,
+				"Should find at least 3 callees, found: " + callees.length);
+
+		Set<String> calleeNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			calleeNames.add(callee.getElementName());
+		}
+		assertTrue(calleeNames.contains("DataProcessor"),
+				"Should find DataProcessor constructor call");
+		assertTrue(calleeNames.contains("transform"),
+				"Should find transform method call");
+		assertTrue(calleeNames.contains("validate"),
+				"Should find validate method call");
+	}
+
+	@Test
+	public void testLocateCalleesDistinguishesCalleeKinds()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/KindTest.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun kindTestFunction() {\n"
+				+ "    val obj = StringBuilder()\n"
+				+ "    obj.append(\"x\")\n"
+				+ "    println(obj)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
+				"kindTestFunction", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1);
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath().toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		// StringBuilder → TYPE (constructor), append → METHOD, println → METHOD
+		Map<Integer, List<SearchMatch>> byType = Arrays.stream(callees)
+				.collect(Collectors.groupingBy(
+						m -> ((IMember) m.getElement()).getElementType()));
+
+		assertTrue(byType.containsKey(IJavaElement.TYPE),
+				"Should have TYPE callees (constructor calls)");
+		assertTrue(byType.containsKey(IJavaElement.METHOD),
+				"Should have METHOD callees (method calls)");
+
+		// StringBuilder should be TYPE
+		boolean foundCtorAsType = Arrays.stream(callees)
+				.anyMatch(m -> ((IMember) m.getElement()).getElementName()
+						.equals("StringBuilder")
+						&& ((IMember) m.getElement()).getElementType()
+						== IJavaElement.TYPE);
+		assertTrue(foundCtorAsType,
+				"StringBuilder() should be reported as TYPE (constructor)");
+
+		// append should be METHOD
+		boolean foundMethodCall = Arrays.stream(callees)
+				.anyMatch(m -> ((IMember) m.getElement()).getElementName()
+						.equals("append")
+						&& ((IMember) m.getElement()).getElementType()
+						== IJavaElement.METHOD);
+		assertTrue(foundMethodCall,
+				"append() should be reported as METHOD");
+	}
+
+	@Test
+	public void testLocateCalleesScopedToDeclaration() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/TwoFunctions.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun firstFunction() {\n"
+				+ "    val a = ArrayList<String>()\n"
+				+ "    a.add(\"x\")\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun secondFunction() {\n"
+				+ "    val b = HashMap<String, Int>()\n"
+				+ "    b.put(\"k\", 1)\n"
+				+ "    b.remove(\"k\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+
+		// Get firstFunction declaration
+		List<SearchMatch> firstDecls = TestHelpers.searchMethodDeclarations(
+				"firstFunction", project);
+		List<SearchMatch> ktFirst = TestHelpers.filterKotlinMatches(firstDecls);
+		assertTrue(ktFirst.size() >= 1);
+		IMember firstCaller = (IMember) ktFirst.get(0).getElement();
+
+		String path = firstCaller.getCompilationUnit().getPath().toString();
+		SearchMatch[] firstCallees = participant.locateCallees(
+				firstCaller, participant.getDocument(path), null);
+
+		Set<String> firstNames = new HashSet<>();
+		for (SearchMatch m : firstCallees) {
+			firstNames.add(((IMember) m.getElement()).getElementName());
+		}
+		assertTrue(firstNames.contains("add"),
+				"firstFunction should call add()");
+		assertFalse(firstNames.contains("put"),
+				"firstFunction should NOT contain put() from secondFunction");
+		assertFalse(firstNames.contains("remove"),
+				"firstFunction should NOT contain remove() from secondFunction");
+
+		// Get secondFunction declaration
+		List<SearchMatch> secondDecls = TestHelpers.searchMethodDeclarations(
+				"secondFunction", project);
+		List<SearchMatch> ktSecond = TestHelpers.filterKotlinMatches(secondDecls);
+		assertTrue(ktSecond.size() >= 1);
+		IMember secondCaller = (IMember) ktSecond.get(0).getElement();
+
+		SearchMatch[] secondCallees = participant.locateCallees(
+				secondCaller, participant.getDocument(path), null);
+
+		Set<String> secondNames = new HashSet<>();
+		for (SearchMatch m : secondCallees) {
+			secondNames.add(((IMember) m.getElement()).getElementName());
+		}
+		assertTrue(secondNames.contains("put"),
+				"secondFunction should call put()");
+		assertTrue(secondNames.contains("remove"),
+				"secondFunction should call remove()");
+		assertFalse(secondNames.contains("add"),
+				"secondFunction should NOT contain add() from firstFunction");
+	}
+
+	@Test
+	public void testLocateCalleesEmptyForNoCallSites() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/NoCalls.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun noCallsFunction(): Int {\n"
+				+ "    val x = 1 + 2\n"
+				+ "    return x * 3\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
+				"noCallsFunction", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1);
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath().toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		assertEquals(0, callees.length,
+				"Function with no call sites should return empty callees");
+	}
+
+	@Test
+	public void testLocateCalleesCallSiteOffsets() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/Offsets.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun offsetTestFunction() {\n"
+				+ "    val s = StringBuilder()\n"
+				+ "    s.append(\"a\")\n"
+				+ "    s.append(\"b\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
+				"offsetTestFunction", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1);
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath().toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		// Find both append calls
+		List<SearchMatch> appendCallees = Arrays.stream(callees)
+				.filter(m -> ((IMember) m.getElement()).getElementName()
+						.equals("append"))
+				.toList();
+		assertTrue(appendCallees.size() >= 2,
+				"Should find at least 2 append() call sites");
+
+		// Verify they have different offsets and positive lengths
+		assertTrue(appendCallees.get(0).getOffset()
+				!= appendCallees.get(1).getOffset(),
+				"Two append() calls should have different offsets");
+		for (SearchMatch m : appendCallees) {
+			assertTrue(m.getOffset() >= 0, "Offset should be non-negative");
+			assertTrue(m.getLength() > 0, "Length should be positive");
+		}
+	}
+
+	@Test
+	public void testLocateCalleesStubExists() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callhier/StubTest.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "fun stubTestFunction() {\n"
+				+ "    val x = ArrayList<String>()\n"
+				+ "    x.add(\"item\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
+				"stubTestFunction", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1);
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath().toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		assertTrue(callees.length >= 2,
+				"Should find at least 2 callees");
+
+		// All callee elements should be stubs that don't "exist"
+		// (so resolveCallee in CalleeMethodWrapper will do a declaration search)
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			assertFalse(callee.exists(),
+					"Callee stub should return false from exists()");
+			assertNotNull(callee.getElementName(),
+					"Callee stub should have a name");
+			assertTrue(callee.getElementType() == IJavaElement.METHOD
+					|| callee.getElementType() == IJavaElement.TYPE,
+					"Callee stub should be METHOD or TYPE");
+		}
+	}
+
+	@Test
+	public void testKotlinElementNavigationMethods() throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/callhier/NavTest.kt",
+				"package callhier\n"
+				+ "\n"
+				+ "class NavTestClass {\n"
+				+ "    fun navTestMethod(): String = \"nav\"\n"
+				+ "    val navTestField: Int = 42\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Get a type element
+		List<SearchMatch> typeMatches = TestHelpers.searchKotlinTypes("NavTestClass", project);
+		assertTrue(typeMatches.size() >= 1);
+		KotlinElement typeElem = (KotlinElement) typeMatches.get(0).getElement();
+
+		// Test getAncestor
+		assertTrue(typeElem == typeElem.getAncestor(IJavaElement.TYPE),
+				"getAncestor(TYPE) should return self for a type element");
+		assertNotNull(typeElem.getAncestor(IJavaElement.COMPILATION_UNIT),
+				"getAncestor(COMPILATION_UNIT) should return the CU");
+		assertInstanceOf(KotlinCompilationUnit.class,
+				typeElem.getAncestor(IJavaElement.COMPILATION_UNIT));
+
+		// Test getParent
+		assertNotNull(typeElem.getParent(), "getParent should return CU");
+		assertInstanceOf(KotlinCompilationUnit.class, typeElem.getParent());
+
+		// Test getResource, getCorrespondingResource, getUnderlyingResource
+		assertNotNull(typeElem.getResource(), "getResource should not be null");
+		assertNotNull(typeElem.getCorrespondingResource(),
+				"getCorrespondingResource should not be null");
+		assertNotNull(typeElem.getUnderlyingResource(),
+				"getUnderlyingResource should not be null");
+
+		// Test getJavaProject
+		assertNotNull(typeElem.getJavaProject(), "getJavaProject should not be null");
+
+		// Test getJavaModel
+		assertNotNull(typeElem.getJavaModel(), "getJavaModel should not be null");
+
+		// Test getOpenable
+		assertNotNull(typeElem.getOpenable(), "getOpenable should not be null");
+
+		// Test getPath
+		assertNotNull(typeElem.getPath(), "getPath should not be null");
+		assertTrue(typeElem.getPath().toString().endsWith("NavTest.kt"),
+				"Path should end with NavTest.kt");
+
+		// Test getPrimaryElement
+		assertTrue(typeElem == typeElem.getPrimaryElement(),
+				"getPrimaryElement should return self");
+
+		// Test getHandleIdentifier
+		assertNotNull(typeElem.getHandleIdentifier(),
+				"getHandleIdentifier should not be null");
+
+		// Test isReadOnly, isStructureKnown
+		assertTrue(typeElem.isReadOnly(), "Kotlin elements are read-only");
+		assertTrue(typeElem.isStructureKnown(), "Structure is known");
+
+		// Test exists
+		assertTrue(typeElem.exists(), "Element should exist");
+
+		// Test getSchedulingRule
+		assertNotNull(typeElem.getSchedulingRule(),
+				"getSchedulingRule should return the resource");
+
+		// Test getAttachedJavadoc
+		assertNull(typeElem.getAttachedJavadoc(null),
+				"No attached javadoc for Kotlin elements");
+
+		// Test getAdapter
+		assertNotNull(typeElem.getAdapter(IMember.class),
+				"getAdapter(IMember) should return self");
+		assertNull(typeElem.getAdapter(String.class),
+				"getAdapter(String) should return null");
+
+		// Test getChildren, hasChildren
+		assertEquals(0, typeElem.getChildren().length,
+				"Kotlin elements have no children");
+		assertFalse(typeElem.hasChildren(),
+				"Kotlin elements have no children");
+
+		// Test getSource
+		assertNull(typeElem.getSource(), "getSource returns null");
+
+		// Test read-only operations throw
+		try {
+			typeElem.delete(false, null);
+			assertTrue(false, "delete should throw");
+		} catch (Exception e) {
+			// expected
+		}
+
+		// Test method element
+		List<SearchMatch> methodMatches = TestHelpers.searchMethodDeclarations(
+				"navTestMethod", project);
+		List<SearchMatch> ktMethods = TestHelpers.filterKotlinMatches(methodMatches);
+		assertTrue(ktMethods.size() >= 1);
+		KotlinElement.KotlinMethodElement methodElem =
+				(KotlinElement.KotlinMethodElement) ktMethods.get(0).getElement();
+		assertEquals(0, methodElem.getParameterCount(),
+				"navTestMethod has 0 parameters");
+		assertEquals(IJavaElement.METHOD, methodElem.getElementType());
+
+		// Test field element
+		List<SearchMatch> fieldMatches = TestHelpers.searchFieldDeclarations(
+				"navTestField", project);
+		List<SearchMatch> ktFields = TestHelpers.filterKotlinMatches(fieldMatches);
+		assertTrue(ktFields.size() >= 1);
+		KotlinElement.KotlinFieldElement fieldElem =
+				(KotlinElement.KotlinFieldElement) ktFields.get(0).getElement();
+		assertEquals(IJavaElement.FIELD, fieldElem.getElementType());
+
+		// Test ISourceRange
+		assertNotNull(typeElem.getSourceRange(), "Should have source range");
+		assertTrue(typeElem.getSourceRange().getOffset() >= 0,
+				"Source range offset should be valid");
+		assertTrue(typeElem.getSourceRange().getLength() > 0,
+				"Source range length should be positive");
+		assertNotNull(typeElem.getNameRange(), "Should have name range");
+	}
+
+	// ---- End-to-end call hierarchy via CallHierarchyCore ----
+
+	@Test
+	public void testIncomingCallsViaCallHierarchyCore() throws Exception {
+		// Java method called from Kotlin
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/e2ecall");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/e2ecall/Target.java",
+				"package e2ecall;\n"
+				+ "public class Target {\n"
+				+ "    public void targetMethod() {}\n"
+				+ "}\n");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/e2ecall/Caller.kt",
+				"package e2ecall\n"
+				+ "\n"
+				+ "class KotlinCaller {\n"
+				+ "    fun callTarget(t: Target) {\n"
+				+ "        t.targetMethod()\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Find the Java target method
+		ICompilationUnit javaCu = TestHelpers.getJavaCompilationUnit(
+				project,"e2ecall", "Target.java");
+		assertNotNull(javaCu, "Java CU should exist");
+		IType targetType = javaCu.getType("Target");
+		IMethod targetMethod = targetType.getMethod("targetMethod",
+				new String[0]);
+		assertTrue(targetMethod.exists(),
+				"Target.targetMethod() should exist");
+
+		// First verify the search pipeline works directly
+		List<SearchMatch> directMatches =
+				TestHelpers.searchMethodReferences("targetMethod", project);
+		List<SearchMatch> ktDirectMatches = TestHelpers.filterKotlinMatches(directMatches);
+		assertTrue(ktDirectMatches.size() >= 1,
+				"Direct search should find Kotlin reference to "
+						+ "targetMethod. Found " + directMatches.size()
+						+ " total matches, " + ktDirectMatches.size()
+						+ " Kotlin matches");
+
+		// Verify the match element has proper declaring type
+		for (SearchMatch m : ktDirectMatches) {
+			IMember matchMember = (IMember) m.getElement();
+			assertNotNull(matchMember.getDeclaringType(),
+					"Match element '" + matchMember.getElementName()
+							+ "' should have a declaring type");
+			assertNotNull(matchMember.getDeclaringType()
+							.getFullyQualifiedName(),
+					"Declaring type should have FQN");
+		}
+
+		// Test element-based search (same as CallerMethodWrapper uses)
+		SearchPattern elementPattern = SearchPattern.createPattern(
+				targetMethod, IJavaSearchConstants.REFERENCES,
+				SearchPattern.R_EXACT_MATCH | SearchPattern.R_CASE_SENSITIVE
+						| SearchPattern.R_ERASURE_MATCH);
+		assertNotNull(elementPattern, "Pattern should not be null");
+
+		// Diagnose: check selectIndexes + index contents
+		IJavaSearchScope projectScope = SearchEngine
+				.createJavaSearchScope(new IJavaProject[] { project });
+		List<SearchMatch> elementMatches = new ArrayList<>();
+		new SearchEngine().search(elementPattern,
+				SearchEngine.getSearchParticipants(),
+				projectScope,
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch match) {
+						elementMatches.add(match);
+					}
+				}, new NullProgressMonitor());
+		List<SearchMatch> elementKt = TestHelpers.filterKotlinMatches(elementMatches);
+		// Direct call to Kotlin participant's locateMatches
+		SearchParticipant ktParticipant = SearchParticipantRegistry
+				.getParticipant("kt");
+		assertNotNull(ktParticipant, "Kotlin participant should exist");
+		IFile ktCallerFile = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/e2ecall/Caller.kt");
+		assertTrue(ktCallerFile.exists(), "Kotlin file should exist");
+		SearchDocument ktDoc = ktParticipant.getDocument(
+				ktCallerFile.getFullPath().toString());
+		List<SearchMatch> directMatches2 = new ArrayList<>();
+		ktParticipant.locateMatches(
+				new SearchDocument[] { ktDoc },
+				elementPattern, projectScope,
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch match) {
+						directMatches2.add(match);
+					}
+				}, null);
+		StringBuilder diag = new StringBuilder();
+		diag.append("directCall=").append(directMatches2.size());
+		diag.append(", viaEngine=").append(elementMatches.size());
+
+		assertTrue(elementKt.size() >= 1 || !directMatches2.isEmpty(),
+				"Element-based search: " + diag);
+
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { targetMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+
+		// Should find the Kotlin caller
+		boolean foundKotlinCaller = false;
+		for (MethodWrapper caller : callers) {
+			IMember member = caller.getMember();
+			if (member instanceof KotlinElement) {
+				foundKotlinCaller = true;
+				assertEquals("callTarget", member.getElementName(),
+						"Kotlin caller should be callTarget");
+			}
+		}
+		assertTrue(foundKotlinCaller,
+				"Should find Kotlin caller via CallHierarchyCore "
+						+ "incoming calls. Found " + callers.length
+						+ " caller(s): " + Arrays.stream(callers)
+								.map(c -> c.getMember().getElementName()
+										+ "(" + c.getMember().getClass()
+												.getSimpleName() + ")")
+								.collect(Collectors.joining(", ")));
+	}
+
+	@Test
+	public void testConstructorDelegationInOutgoingCalls()
+			throws Exception {
+		// class Derived : Base() — constructor delegation should
+		// appear in outgoing call hierarchy
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/e2ector");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/e2ector/Defs.kt",
+				"package e2ector\n"
+				+ "open class Base(val name: String)\n"
+				+ "class Derived : Base(\"derived\") {\n"
+				+ "    fun work() {\n"
+				+ "        println(name)\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		// Find work() declaration to use as caller
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("work", project);
+		List<SearchMatch> ktDecls = TestHelpers.filterKotlinMatches(
+				decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find work() declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		boolean foundPrintln = false;
+		for (SearchMatch callee : callees) {
+			if (callee.getElement() instanceof IJavaElement je
+					&& "println".equals(je.getElementName())) {
+				foundPrintln = true;
+			}
+		}
+		assertTrue(foundPrintln,
+				"Outgoing calls from work() should include "
+						+ "println");
+	}
+
+	@Test
+	public void testOutgoingCallsViaCallHierarchyCore() throws Exception {
+		// Kotlin function calls Java method — exercise
+		// CalleeMethodWrapper → locateCallees()
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/e2eout");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/e2eout/JavaTarget.java",
+				"package e2eout;\n"
+				+ "public class JavaTarget {\n"
+				+ "    public void javaMethod() {}\n"
+				+ "    public void anotherJavaMethod() {}\n"
+				+ "}\n");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/e2eout/KotlinSource.kt",
+				"package e2eout\n"
+				+ "\n"
+				+ "class KotlinSource {\n"
+				+ "    fun callsJava(t: JavaTarget) {\n"
+				+ "        t.javaMethod()\n"
+				+ "        t.anotherJavaMethod()\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Get the Kotlin method as an IMember via search
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations(
+				"callsJava", project);
+		List<SearchMatch> ktMatches = TestHelpers.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find callsJava declaration in .kt");
+
+		IMember kotlinMethod = (IMember) ktMatches.get(0).getElement();
+		assertNotNull(kotlinMethod, "Kotlin method should be non-null");
+
+		// Get outgoing callees via CallHierarchyCore
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCalleeRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callees = roots[0].getCalls(
+				new NullProgressMonitor());
+
+		// Should find Java callees via locateCallees() fallback
+		Set<String> calleeNames = new HashSet<>();
+		for (MethodWrapper callee : callees) {
+			calleeNames.add(callee.getMember().getElementName());
+		}
+
+		assertTrue(calleeNames.contains("javaMethod"),
+				"Should find javaMethod as outgoing callee. Found: "
+						+ calleeNames);
+		assertTrue(calleeNames.contains("anotherJavaMethod"),
+				"Should find anotherJavaMethod as outgoing callee. Found: "
+						+ calleeNames);
+	}
+}

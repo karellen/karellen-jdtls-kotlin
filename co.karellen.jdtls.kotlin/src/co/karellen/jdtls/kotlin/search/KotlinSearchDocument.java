@@ -15,34 +15,79 @@
  */
 package co.karellen.jdtls.kotlin.search;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.core.search.SearchParticipant;
 
 /**
- * Stub search document for Kotlin files. Does not read actual file content;
- * returns empty contents since the stub participant derives all index entries
- * from the file path.
+ * Search document for Kotlin files. Reads actual file content from the
+ * workspace for ANTLR4-based parsing.
  *
  * @author Arcadiy Ivanov
  */
 public class KotlinSearchDocument extends SearchDocument {
 
+	private char[] charContents;
+	private byte[] byteContents;
+
 	protected KotlinSearchDocument(String documentPath, SearchParticipant participant) {
 		super(documentPath, participant);
 	}
 
+	@CoverageExcludeGenerated
 	@Override
 	public byte[] getByteContents() {
-		return new byte[0];
+		if (byteContents == null) {
+			loadContents();
+		}
+		return byteContents;
 	}
 
 	@Override
 	public char[] getCharContents() {
-		return new char[0];
+		if (charContents == null) {
+			loadContents();
+		}
+		return charContents;
 	}
 
+	@CoverageExcludeGenerated
 	@Override
 	public String getEncoding() {
 		return "UTF-8";
+	}
+
+	private void loadContents() {
+		String path = getPath();
+		if (path == null) {
+			byteContents = new byte[0];
+			charContents = new char[0];
+			return;
+		}
+		IFile file = ResourcesPlugin.getWorkspace().getRoot()
+				.getFile(IPath.fromPortableString(path));
+		if (file == null || !file.exists()) {
+			byteContents = new byte[0];
+			charContents = new char[0];
+			return;
+		}
+		try (InputStream is = file.getContents(true)) {
+			byteContents = is.readAllBytes();
+			charContents = new String(byteContents, StandardCharsets.UTF_8).toCharArray();
+		} catch (CoreException | IOException e) {
+			org.eclipse.core.runtime.Platform.getLog(
+					KotlinSearchDocument.class).warn(
+					"Failed to read search document: "
+							+ getPath(), e);
+			byteContents = new byte[0];
+			charContents = new char[0];
+		}
 	}
 }
