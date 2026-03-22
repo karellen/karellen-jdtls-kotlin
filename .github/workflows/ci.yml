@@ -54,13 +54,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Resolve fork artifacts from GitHub Packages
-        run: |
-          mvn dependency:resolve -B -q \
-            -DremoteRepositories=github-jdtls::default::https://maven.pkg.github.com/karellen/karellen-jdtls \
-            || true
+      - name: Download fork m2 repository
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -eEuo pipefail
+          FORKS_RUN_ID=$(gh run list --repo karellen/karellen-jdtls --workflow=forks.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          gh run download "$FORKS_RUN_ID" --repo karellen/karellen-jdtls \
+            -n m2-forks -D .
+          mkdir -p ~/.m2/repository
+          tar xzf m2-forks.tar.gz -C ~/.m2/repository
+          rm m2-forks.tar.gz
 
       - name: Build and test with coverage
         run: mvn clean install -B
@@ -164,13 +169,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Resolve fork artifacts from GitHub Packages
-        run: |
-          mvn dependency:resolve -B -q \
-            -DremoteRepositories=github-jdtls::default::https://maven.pkg.github.com/karellen/karellen-jdtls \
-            || true
+      - name: Download fork m2 repository
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -eEuo pipefail
+          FORKS_RUN_ID=$(gh run list --repo karellen/karellen-jdtls --workflow=forks.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          gh run download "$FORKS_RUN_ID" --repo karellen/karellen-jdtls \
+            -n m2-forks -D .
+          mkdir -p ~/.m2/repository
+          tar xzf m2-forks.tar.gz -C ~/.m2/repository
+          rm m2-forks.tar.gz
 
       - name: Deploy to GitHub Packages
         run: mvn deploy -DskipTests -pl '!co.karellen.jdtls.kotlin.tests,!co.karellen.jdtls.kotlin.coverage' -B
