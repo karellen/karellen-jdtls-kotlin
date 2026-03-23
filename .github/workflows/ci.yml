@@ -78,8 +78,8 @@ jobs:
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           tar czf m2-kotlin-plugin.tar.gz -C ~/.m2/repository co/karellen
           gh release create "$VERSION" --prerelease --title "$VERSION" \
-            --notes "Snapshot build" m2-kotlin-plugin.tar.gz --clobber 2>/dev/null \
-            || gh release upload "$VERSION" m2-kotlin-plugin.tar.gz --clobber
+            --notes "Snapshot build" || true
+          gh release upload "$VERSION" m2-kotlin-plugin.tar.gz --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
