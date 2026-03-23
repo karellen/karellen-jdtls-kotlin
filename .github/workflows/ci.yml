@@ -59,16 +59,29 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -eEuo pipefail
-          FORKS_RUN_ID=$(gh run list --repo karellen/karellen-jdtls --workflow=forks.yml \
-            --status success --limit 1 --json databaseId -q '.[0].databaseId')
-          gh run download "$FORKS_RUN_ID" --repo karellen/karellen-jdtls \
-            -n m2-forks -D .
+          FORKS_TAG=$(gh release list --repo karellen/karellen-jdtls \
+            --json tagName -q '[.[] | select(.tagName | startswith("forks-"))][0].tagName')
+          echo "Downloading fork m2 from release $FORKS_TAG"
+          gh release download "$FORKS_TAG" --repo karellen/karellen-jdtls \
+            -p m2-forks.tar.gz -D .
           mkdir -p ~/.m2/repository
           tar xzf m2-forks.tar.gz -C ~/.m2/repository
           rm m2-forks.tar.gz
 
       - name: Build and test with coverage
         run: mvn clean install -B
+
+      - name: Publish snapshot m2 artifacts
+        if: github.ref == 'refs/heads/master'
+        run: |
+          set -eEuo pipefail
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          tar czf m2-kotlin-plugin.tar.gz -C ~/.m2/repository co/karellen
+          gh release create "$VERSION" --prerelease --title "$VERSION" \
+            --notes "Snapshot build" m2-kotlin-plugin.tar.gz --clobber 2>/dev/null \
+            || gh release upload "$VERSION" m2-kotlin-plugin.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format JaCoCo XML for Coveralls
         if: always() && hashFiles('co.karellen.jdtls.kotlin.coverage/target/site/jacoco/jacoco.xml') != ''
@@ -174,10 +187,11 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -eEuo pipefail
-          FORKS_RUN_ID=$(gh run list --repo karellen/karellen-jdtls --workflow=forks.yml \
-            --status success --limit 1 --json databaseId -q '.[0].databaseId')
-          gh run download "$FORKS_RUN_ID" --repo karellen/karellen-jdtls \
-            -n m2-forks -D .
+          FORKS_TAG=$(gh release list --repo karellen/karellen-jdtls \
+            --json tagName -q '[.[] | select(.tagName | startswith("forks-"))][0].tagName')
+          echo "Downloading fork m2 from release $FORKS_TAG"
+          gh release download "$FORKS_TAG" --repo karellen/karellen-jdtls \
+            -p m2-forks.tar.gz -D .
           mkdir -p ~/.m2/repository
           tar xzf m2-forks.tar.gz -C ~/.m2/repository
           rm m2-forks.tar.gz
@@ -202,6 +216,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           gh api repos/karellen/karellen-jdtls/dispatches \
             -f event_type=kotlin-plugin-snapshot \
+            -f 'client_payload[version]'="$VERSION" \
             -f 'client_payload[run_id]'="${{ github.run_id }}"
