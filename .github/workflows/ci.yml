@@ -76,7 +76,7 @@ jobs:
         run: |
           set -eEuo pipefail
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          tar czf m2-kotlin-plugin.tar.gz -C ~/.m2/repository co/karellen
+          tar czf m2-kotlin-plugin.tar.gz -C ~/.m2/repository co/karellen .meta
           gh release create "$VERSION" --prerelease --title "$VERSION" \
             --notes "Snapshot build" || true
           gh release upload "$VERSION" m2-kotlin-plugin.tar.gz --clobber
