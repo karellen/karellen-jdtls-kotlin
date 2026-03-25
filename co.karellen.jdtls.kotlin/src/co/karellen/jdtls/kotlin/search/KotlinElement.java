@@ -489,6 +489,7 @@ public abstract class KotlinElement implements IMember {
 		private final KotlinDeclaration.TypeDeclaration.Kind kind;
 		private final String[] supertypeNames;
 		private IJavaElement[] children;
+		private KotlinTypeElement declaringType;
 
 		public KotlinTypeElement(String name,
 				KotlinCompilationUnit compilationUnit, String packageName,
@@ -520,6 +521,21 @@ public abstract class KotlinElement implements IMember {
 			this.children = children;
 		}
 
+		void setDeclaringType(KotlinTypeElement type) {
+			this.declaringType = type;
+		}
+
+		@Override
+		public IType getDeclaringType() {
+			return declaringType;
+		}
+
+		@Override
+		public IJavaElement getParent() {
+			return declaringType != null ? declaringType
+					: super.getParent();
+		}
+
 		@CoverageExcludeGenerated
 		public String getPackageName() {
 			return packageName;
@@ -544,8 +560,13 @@ public abstract class KotlinElement implements IMember {
 				sb.append(packageName).append('.');
 			}
 			if (enclosingTypeName != null && !enclosingTypeName.isEmpty()) {
-				sb.append(enclosingTypeName)
-						.append(enclosingTypeSeparator);
+				if (enclosingTypeSeparator == '.') {
+					sb.append(enclosingTypeName);
+				} else {
+					sb.append(enclosingTypeName.replace('.',
+							enclosingTypeSeparator));
+				}
+				sb.append(enclosingTypeSeparator);
 			}
 			sb.append(getElementName());
 			return sb.toString();
@@ -632,8 +653,11 @@ public abstract class KotlinElement implements IMember {
 		@Override
 		public String getTypeQualifiedName(char enclosingTypeSeparator) {
 			if (enclosingTypeName != null && !enclosingTypeName.isEmpty()) {
-				return enclosingTypeName + enclosingTypeSeparator
-						+ getElementName();
+				String enc = enclosingTypeSeparator == '.'
+						? enclosingTypeName
+						: enclosingTypeName.replace('.',
+								enclosingTypeSeparator);
+				return enc + enclosingTypeSeparator + getElementName();
 			}
 			return getElementName();
 		}
@@ -1406,6 +1430,7 @@ public abstract class KotlinElement implements IMember {
 				} else if (member instanceof KotlinDeclaration.TypeDeclaration nested) {
 					KotlinTypeElement nestedType = buildTypeElement(
 							nested, cu, packageName);
+					nestedType.setDeclaringType(typeElement);
 					childElements.add(nestedType);
 				}
 			}
@@ -1454,6 +1479,31 @@ public abstract class KotlinElement implements IMember {
 				ctorDecl.getStartOffset(), sourceLength,
 				paramTypes, paramNames, Signature.SIG_VOID,
 				true, ctorDecl.getModifiers());
+	}
+
+	/**
+	 * Creates a synthetic file-facade type for top-level declarations.
+	 * Mirrors the Kotlin compiler convention: {@code FileNameKt} for
+	 * {@code FileName.kt}. JDT infrastructure (e.g.,
+	 * {@code CallSearchResultCollector.isIgnored()}) requires every
+	 * method/field to have a non-null declaring type.
+	 */
+	public static KotlinTypeElement buildFileFacadeType(
+			KotlinCompilationUnit cu, String packageName) {
+		String fileName = cu != null ? cu.getElementName() : "";
+		String baseName;
+		if (fileName.endsWith(".kts")) {
+			baseName = fileName.substring(0,
+					fileName.length() - 4);
+		} else if (fileName.endsWith(".kt")) {
+			baseName = fileName.substring(0,
+					fileName.length() - 3);
+		} else {
+			baseName = fileName;
+		}
+		String facadeName = baseName + "Kt";
+		return new KotlinTypeElement(facadeName, cu, packageName,
+				null, 0, 0, null, new String[0], 0);
 	}
 
 	@CoverageExcludeGenerated

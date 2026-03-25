@@ -44,6 +44,7 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 	private final SearchDocument document;
 	private final Set<String> indexedTypeRefs = new HashSet<>(); // lowercase keys for case-insensitive dedup
 	private final Map<String, String> aliasToOriginal;
+	private final Set<String> propertyNames = new HashSet<>();
 
 	public KotlinReferenceIndexer(SearchDocument document) {
 		this(document, null);
@@ -208,21 +209,12 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 										IIndexConstants.METHOD_REF, origKey);
 							}
 						} else {
-							document.addIndexEntry(
-									IIndexConstants.REF,
-									memberName.toCharArray());
-							if (originalMember != null) {
-								document.addIndexEntry(IIndexConstants.REF,
-										originalMember.toCharArray());
-							}
+							indexPropertyAccess(memberName,
+									originalMember);
 						}
 					} else {
-						document.addIndexEntry(IIndexConstants.REF,
-								memberName.toCharArray());
-						if (originalMember != null) {
-							document.addIndexEntry(IIndexConstants.REF,
-									originalMember.toCharArray());
-						}
+						indexPropertyAccess(memberName,
+								originalMember);
 					}
 				}
 			}
@@ -309,6 +301,58 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 			}
 		}
 		return visitChildren(ctx);
+	}
+
+	/**
+	 * Indexes a property-style access ({@code obj.name} without call
+	 * parens). Emits REF for the property name plus METHOD_REF for
+	 * Java-convention getter/setter names ({@code getName}/{@code setName}).
+	 */
+	private void indexPropertyAccess(String name, String originalName) {
+		document.addIndexEntry(IIndexConstants.REF,
+				name.toCharArray());
+		if (originalName != null) {
+			document.addIndexEntry(IIndexConstants.REF,
+					originalName.toCharArray());
+		}
+		// Also index getter/setter METHOD_REFs for Java interop
+		indexGetterSetterRefs(name);
+		if (originalName != null) {
+			indexGetterSetterRefs(originalName);
+		}
+	}
+
+	private void indexGetterSetterRefs(String propertyName) {
+		if (propertyName.isEmpty()) {
+			return;
+		}
+		// Emit standard getter/setter: capitalize first char
+		String capitalized = Character.toUpperCase(propertyName.charAt(0))
+				+ propertyName.substring(1);
+		emitGetterSetterEntries(capitalized);
+		// Collect for post-indexing JDT lookup of actual getter names
+		propertyNames.add(propertyName);
+	}
+
+	void emitGetterSetterEntries(String capitalizedName) {
+		char[] getKey = MethodPattern.createIndexKey(
+				("get" + capitalizedName).toCharArray(), 0);
+		document.addIndexEntry(IIndexConstants.METHOD_REF, getKey);
+		char[] isKey = MethodPattern.createIndexKey(
+				("is" + capitalizedName).toCharArray(), 0);
+		document.addIndexEntry(IIndexConstants.METHOD_REF, isKey);
+		char[] setKey = MethodPattern.createIndexKey(
+				("set" + capitalizedName).toCharArray(), 1);
+		document.addIndexEntry(IIndexConstants.METHOD_REF, setKey);
+	}
+
+	/**
+	 * Returns the set of property names encountered during indexing.
+	 * Used by KotlinSearchParticipant to look up actual Java getter
+	 * names from the JDT index and emit exact METHOD_REF entries.
+	 */
+	Set<String> getPropertyNames() {
+		return propertyNames;
 	}
 
 	// ---- Callable references (::name, Type::name) ----
