@@ -188,7 +188,20 @@ public class KotlinFileParser {
 		}
 
 		private String currentEnclosingTypeName() {
-			return enclosingTypeStack.peek();
+			if (enclosingTypeStack.isEmpty()) {
+				return null;
+			}
+			// Stack is front=innermost, back=outermost; join in
+			// reverse (outermost first) to get "Outer.Middle"
+			StringBuilder sb = new StringBuilder();
+			for (var it = enclosingTypeStack.descendingIterator();
+					it.hasNext(); ) {
+				if (sb.length() > 0) {
+					sb.append('.');
+				}
+				sb.append(it.next());
+			}
+			return sb.toString();
 		}
 
 		private List<KotlinDeclaration> currentTarget() {

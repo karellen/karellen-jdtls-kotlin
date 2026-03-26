@@ -203,21 +203,29 @@ public final class KotlinModelManager {
 		cu.setTypes(types.toArray(
 				new KotlinElement.KotlinTypeElement[0]));
 
-		// Also build top-level functions and properties as children
+		// Build top-level functions and properties as children.
+		// Set synthetic file-facade declaring type — JDT requires
+		// non-null declaring type on every method/field element.
+		KotlinElement.KotlinTypeElement fileFacade =
+				KotlinElement.buildFileFacadeType(cu, packageName);
 		List<IJavaElement> topLevelChildren = new ArrayList<>(types);
 		for (KotlinDeclaration decl : model.getDeclarations()) {
 			if (decl instanceof KotlinDeclaration.MethodDeclaration md) {
-				topLevelChildren.add(
-						KotlinElement.buildMethodElement(md, cu));
+				KotlinElement.KotlinMethodElement me =
+						KotlinElement.buildMethodElement(md, cu);
+				me.setDeclaringType(fileFacade);
+				topLevelChildren.add(me);
 			} else if (decl instanceof KotlinDeclaration.PropertyDeclaration pd) {
 				int len = pd.getEndOffset() - pd.getStartOffset() + 1;
-				topLevelChildren.add(
+				KotlinElement.KotlinFieldElement fe =
 						new KotlinElement.KotlinFieldElement(
 								pd.getName(), cu,
 								pd.getStartOffset(), len,
 								KotlinElement.toTypeSignature(
 										pd.getTypeName()),
-								false, pd.getModifiers()));
+								false, pd.getModifiers());
+				fe.setDeclaringType(fileFacade);
+				topLevelChildren.add(fe);
 			}
 		}
 		cu.setAllChildren(topLevelChildren.toArray(

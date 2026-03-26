@@ -15,12 +15,14 @@
  */
 package co.karellen.jdtls.kotlin.search;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import co.karellen.jdtls.kotlin.parser.KotlinParser;
 
@@ -33,18 +35,23 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.IMember;
 import org.eclipse.jdt.core.ISourceRange;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.ITypeHierarchy;
 import org.eclipse.jdt.core.JavaModelException;
+import org.eclipse.jdt.core.search.IJavaSearchConstants;
 import org.eclipse.jdt.core.search.IJavaSearchScope;
 import org.eclipse.jdt.core.search.SearchDocument;
+import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchMatch;
 import org.eclipse.jdt.core.search.SearchParticipant;
 import org.eclipse.jdt.core.search.SearchPattern;
 import org.eclipse.jdt.core.search.SearchRequestor;
 import org.eclipse.jdt.internal.core.JavaModelManager;
+import org.eclipse.jdt.internal.core.index.EntryResult;
+import org.eclipse.jdt.internal.core.index.Index;
 import org.eclipse.jdt.internal.core.index.IndexLocation;
 import org.eclipse.jdt.internal.core.search.indexing.IIndexConstants;
 import org.eclipse.jdt.internal.core.search.indexing.IndexManager;
@@ -67,7 +74,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 	private record EnclosingContext(
 			KotlinDeclaration decl,
-			KotlinDeclaration.TypeDeclaration type) {
+			KotlinDeclaration.TypeDeclaration typeDecl,
+			KotlinElement.KotlinTypeElement typeElement) {
 	}
 
 	private final KotlinModelManager modelManager =
@@ -361,6 +369,109 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		KotlinReferenceIndexer indexer = new KotlinReferenceIndexer(
 				document, fileModel.getImports());
 		indexer.index(fileModel.getParseTree());
+
+		// Look up actual Java getter/setter names from the JDT index
+		// for property accesses. The ANTLR indexer emits standard forms
+		// (getPpInsertTimer), but the actual Java getter might differ
+		// (getPPInsertTimer). Query the Java method declaration index
+		// to find exact names and emit matching METHOD_REF entries.
+		emitExactGetterSetterRefs(document, indexer);
+	}
+
+	private void emitExactGetterSetterRefs(SearchDocument document,
+			KotlinReferenceIndexer indexer) {
+		Set<String> propertyNames = indexer.getPropertyNames();
+		if (propertyNames.isEmpty()) {
+			return;
+		}
+		// Get project index to query method declarations
+		String docPath = document.getPath();
+		IResource resource = ResourcesPlugin.getWorkspace().getRoot()
+				.findMember(IPath.fromPortableString(docPath));
+		if (resource == null) {
+			return;
+		}
+		IJavaProject javaProject = JavaCore.create(resource.getProject());
+		if (javaProject == null || !javaProject.exists()) {
+			return;
+		}
+		IndexManager indexManager = JavaModelManager.getIndexManager();
+		IPath containerPath = javaProject.getProject().getFullPath();
+		IndexLocation indexLocation =
+				indexManager.computeIndexLocation(containerPath);
+		if (indexLocation == null) {
+			return;
+		}
+		Index index = indexManager.getIndex(indexLocation);
+		if (index == null) {
+			return;
+		}
+		try {
+			for (String propertyName : propertyNames) {
+				String standardCapitalized =
+						Character.toUpperCase(propertyName.charAt(0))
+								+ propertyName.substring(1);
+				// Query METHOD_DECL for getters/setters matching this
+				// property name (case-insensitive prefix match)
+				emitExactEntries(document, index, indexer,
+						"get", standardCapitalized, propertyName);
+				emitExactEntries(document, index, indexer,
+						"is", standardCapitalized, propertyName);
+				emitExactEntries(document, index, indexer,
+						"set", standardCapitalized, propertyName);
+			}
+		} catch (IOException e) {
+			org.eclipse.core.runtime.Platform.getLog(
+					KotlinSearchParticipant.class).warn(
+					"Failed to query Java index for getter names",
+					e);
+		}
+	}
+
+	private void emitExactEntries(SearchDocument document,
+			Index index, KotlinReferenceIndexer indexer,
+			String prefix, String standardCapitalized,
+			String propertyName) throws IOException {
+		String standardName = prefix + standardCapitalized;
+		String standardNameLower = standardName.toLowerCase();
+		// Query for method declarations matching the lowercased
+		// getter name (case-insensitive prefix match finds all casings)
+		EntryResult[] entries = index.query(
+				new char[][] { IIndexConstants.METHOD_DECL },
+				standardNameLower.toCharArray(),
+				SearchPattern.R_PREFIX_MATCH);
+		if (entries == null) {
+			return;
+		}
+		for (EntryResult entry : entries) {
+			char[] word = entry.getWord();
+			// METHOD_DECL index key format: methodName/argCount/...
+			int slash = indexOf(word, '/');
+			if (slash <= 0) {
+				continue;
+			}
+			String methodName = new String(word, 0, slash);
+			if (!methodName.toLowerCase().equals(standardNameLower)) {
+				continue;
+			}
+			// Skip if it's the standard form (already emitted)
+			if (methodName.equals(standardName)) {
+				continue;
+			}
+			// Emit METHOD_REF for this exact getter name
+			String capitalizedVariant =
+					methodName.substring(prefix.length());
+			indexer.emitGetterSetterEntries(capitalizedVariant);
+		}
+	}
+
+	private static int indexOf(char[] array, char ch) {
+		for (int i = 0; i < array.length; i++) {
+			if (array[i] == ch) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	private char getSupertypeKind(KotlinDeclaration.TypeDeclaration typeDecl) {
@@ -481,13 +592,24 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 			if (doDeclarations) {
 				for (KotlinDeclaration decl : fileModel.getDeclarations()) {
-					locateMatchesInDeclaration(decl, pattern, cu,
-							requestor, packageName);
+					locateMatchesInDeclaration(decl, null, pattern,
+							cu, requestor, packageName);
 				}
 			}
 			if (doReferences) {
 				locateReferenceMatches(fileModel, pattern, cu, requestor);
 			}
+		}
+
+		// Reverse direction: when searching for field references to a
+		// Kotlin property, also search for Java getter/setter method
+		// calls via the default Java participant. Only run if the
+		// Kotlin index returned documents (i.e., a Kotlin property
+		// with this name exists).
+		if (documents.length > 0 && pattern instanceof FieldPattern
+				&& isFieldReferenceSearch(pattern)) {
+			searchJavaGetterSetterRefs(pattern, scope, requestor,
+					monitor);
 		}
 	}
 
@@ -522,6 +644,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 
 	private void locateMatchesInDeclaration(KotlinDeclaration decl,
+			KotlinElement.KotlinTypeElement enclosingTypeElement,
 			SearchPattern pattern, KotlinCompilationUnit cu,
 			SearchRequestor requestor, String packageName)
 			throws CoreException {
@@ -536,24 +659,34 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			}
 
 			if (report) {
-				reportTypeMatch(typeDecl, cu, requestor, packageName);
+				reportTypeMatch(typeDecl, enclosingTypeElement, cu,
+						requestor, packageName);
 			}
 
-			// Recurse into all members (nested types, methods, properties)
+			// Build the type element for recursion so children inherit
+			// the full declaring type chain
+			KotlinElement.KotlinTypeElement thisTypeElement =
+					buildTypeElementForDecl(typeDecl, cu,
+							packageName, enclosingTypeElement);
+
+			// Recurse into all members
 			for (KotlinDeclaration member : typeDecl.getMembers()) {
-				locateMatchesInDeclaration(member, pattern, cu, requestor,
-						packageName);
+				locateMatchesInDeclaration(member, thisTypeElement,
+						pattern, cu, requestor, packageName);
 			}
 		} else if (decl instanceof KotlinDeclaration.MethodDeclaration methodDecl) {
 			if (pattern instanceof MethodPattern mp) {
 				if (matchesMethodName(methodDecl, mp)) {
-					reportMethodMatch(methodDecl, cu, requestor, packageName);
+					reportMethodMatch(methodDecl,
+							enclosingTypeElement, cu, requestor,
+							packageName);
 				}
 			}
 		} else if (decl instanceof KotlinDeclaration.PropertyDeclaration propDecl) {
 			if (pattern instanceof FieldPattern) {
 				if (matchesFieldName(propDecl, pattern)) {
-					reportFieldMatch(propDecl, cu, requestor, packageName);
+					reportFieldMatch(propDecl, enclosingTypeElement,
+							cu, requestor, packageName);
 				}
 			}
 		} else if (decl instanceof KotlinDeclaration.TypeAliasDeclaration aliasDecl) {
@@ -598,6 +731,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 	}
 
 	private void reportTypeMatch(KotlinDeclaration.TypeDeclaration typeDecl,
+			KotlinElement.KotlinTypeElement enclosingTypeElement,
 			KotlinCompilationUnit cu, SearchRequestor requestor,
 			String packageName) throws CoreException {
 		// endOffset is from ANTLR getStopIndex() which is inclusive
@@ -610,6 +744,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				typeDecl.getKind(),
 				typeDecl.getSupertypes().toArray(new String[0]),
 				typeDecl.getModifiers());
+		element.setDeclaringType(enclosingTypeElement);
 		SearchMatch match = new SearchMatch(element, SearchMatch.A_ACCURATE,
 				typeDecl.getStartOffset(), sourceLength,
 				this, cu.getResource());
@@ -642,12 +777,16 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 	private void reportMethodMatch(
 			KotlinDeclaration.MethodDeclaration methodDecl,
+			KotlinElement.KotlinTypeElement enclosingTypeElement,
 			KotlinCompilationUnit cu, SearchRequestor requestor,
 			String packageName) throws CoreException {
 		int sourceLength = methodDecl.getEndOffset()
 				- methodDecl.getStartOffset() + 1;
 		KotlinElement.KotlinMethodElement element = createMethodElement(
 				methodDecl, cu);
+		element.setDeclaringType(enclosingTypeElement != null
+				? enclosingTypeElement
+				: KotlinElement.buildFileFacadeType(cu, packageName));
 		SearchMatch match = new SearchMatch(element, SearchMatch.A_ACCURATE,
 				methodDecl.getStartOffset(), sourceLength,
 				this, cu.getResource());
@@ -656,6 +795,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 	private void reportFieldMatch(
 			KotlinDeclaration.PropertyDeclaration propDecl,
+			KotlinElement.KotlinTypeElement enclosingTypeElement,
 			KotlinCompilationUnit cu, SearchRequestor requestor,
 			String packageName) throws CoreException {
 		int sourceLength = propDecl.getEndOffset()
@@ -665,6 +805,9 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				propDecl.getStartOffset(), sourceLength,
 				KotlinElement.toTypeSignature(propDecl.getTypeName()),
 				false, propDecl.getModifiers());
+		element.setDeclaringType(enclosingTypeElement != null
+				? enclosingTypeElement
+				: KotlinElement.buildFileFacadeType(cu, packageName));
 		SearchMatch match = new SearchMatch(element, SearchMatch.A_ACCURATE,
 				propDecl.getStartOffset(), sourceLength,
 				this, cu.getResource());
@@ -724,6 +867,21 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		List<KotlinReferenceFinder.ReferenceMatch> refMatches = finder
 				.find(fileModel.getParseTree());
 
+		// Kotlin property access (obj.prop) maps to Java getters/setters.
+		// When searching for getX/setX/isX, also find property access to x.
+		if (matchMethods) {
+			String propertyName = derivePropertyName(targetName);
+			if (propertyName != null) {
+				KotlinReferenceFinder propFinder =
+						new KotlinReferenceFinder(propertyName,
+								false, false, true,
+								fileModel.getImports());
+				refMatches = new ArrayList<>(refMatches);
+				refMatches.addAll(propFinder.find(
+						fileModel.getParseTree()));
+			}
+		}
+
 		String packageName = fileModel.getPackageName();
 
 		// Build type resolution infrastructure for receiver verification
@@ -771,10 +929,12 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				EnclosingContext enclosing =
 						findEnclosingDeclarationAndType(
 								fileModel.getDeclarations(),
-								ref.getOffset());
+								ref.getOffset(), cu, packageName);
 				KotlinDeclaration enclosingDecl = enclosing.decl();
 				KotlinDeclaration.TypeDeclaration enclosingType =
-						enclosing.type();
+						enclosing.typeDecl();
+				KotlinElement.KotlinTypeElement enclosingTypeElement =
+						enclosing.typeElement();
 				if (enclosingDecl == null) {
 					continue;
 				}
@@ -861,7 +1021,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				}
 
 				KotlinElement element = createElementForDeclaration(
-						enclosingDecl, enclosingType, cu, packageName);
+						enclosingDecl, enclosingTypeElement, cu,
+						packageName);
 				if (element == null) {
 					continue;
 				}
@@ -1197,83 +1358,124 @@ public class KotlinSearchParticipant extends SearchParticipant {
 	}
 
 	private EnclosingContext findEnclosingDeclarationAndType(
-			List<KotlinDeclaration> declarations, int offset) {
-		return findEnclosingDeclarationAndType(declarations, offset, null);
+			List<KotlinDeclaration> declarations, int offset,
+			KotlinCompilationUnit cu, String packageName) {
+		return findEnclosingDeclarationAndType(declarations, offset,
+				null, null, cu, packageName);
 	}
 
 	private EnclosingContext findEnclosingDeclarationAndType(
 			List<KotlinDeclaration> declarations, int offset,
-			KotlinDeclaration.TypeDeclaration currentType) {
+			KotlinDeclaration.TypeDeclaration currentTypeDecl,
+			KotlinElement.KotlinTypeElement currentTypeElement,
+			KotlinCompilationUnit cu, String packageName) {
 		for (KotlinDeclaration decl : declarations) {
 			if (offset >= decl.getStartOffset()
 					&& offset <= decl.getEndOffset()) {
 				if (decl instanceof KotlinDeclaration.TypeDeclaration typeDecl) {
+					KotlinElement.KotlinTypeElement typeElement =
+							buildTypeElementForDecl(typeDecl, cu,
+									packageName,
+									currentTypeElement);
 					EnclosingContext nested =
 							findEnclosingDeclarationAndType(
 									typeDecl.getMembers(), offset,
-									typeDecl);
+									typeDecl, typeElement,
+									cu, packageName);
 					if (nested.decl() != null) {
 						return nested;
 					}
-					return new EnclosingContext(typeDecl, currentType);
+					return new EnclosingContext(typeDecl,
+							currentTypeDecl, currentTypeElement);
 				}
 				if (decl instanceof KotlinDeclaration.MethodDeclaration methodDecl) {
-					// Check nested declarations (local functions)
 					if (!methodDecl.getMembers().isEmpty()) {
 						EnclosingContext nested =
 								findEnclosingDeclarationAndType(
 										methodDecl.getMembers(),
-										offset, currentType);
+										offset, currentTypeDecl,
+										currentTypeElement,
+										cu, packageName);
 						if (nested.decl() != null) {
 							return nested;
 						}
 					}
-					return new EnclosingContext(decl, currentType);
+					return new EnclosingContext(decl,
+							currentTypeDecl, currentTypeElement);
 				}
 				if (decl instanceof KotlinDeclaration.ConstructorDeclaration
 						|| decl instanceof KotlinDeclaration.PropertyDeclaration
 						|| decl instanceof KotlinDeclaration.TypeAliasDeclaration) {
-					return new EnclosingContext(decl, currentType);
+					return new EnclosingContext(decl,
+							currentTypeDecl, currentTypeElement);
 				}
 			}
 		}
-		return new EnclosingContext(null, currentType);
+		return new EnclosingContext(null, currentTypeDecl,
+				currentTypeElement);
 	}
 
 	/**
 	 * Creates a KotlinElement for the given declaration, with proper
 	 * declaring type set for members inside a type.
 	 *
-	 * @param decl          the declaration to create an element for
-	 * @param enclosingType the parent type, or {@code null} for top-level
-	 * @param cu            the compilation unit
-	 * @param packageName   the package name
+	 * @param decl               the declaration to create an element for
+	 * @param enclosingTypeElement the parent type element (with full
+	 *                            declaring type chain), or {@code null}
+	 *                            for top-level
+	 * @param cu                 the compilation unit
+	 * @param packageName        the package name
 	 */
+	private static KotlinElement.KotlinTypeElement buildTypeElementForDecl(
+			KotlinDeclaration.TypeDeclaration typeDecl,
+			KotlinCompilationUnit cu, String packageName,
+			KotlinElement.KotlinTypeElement enclosingTypeElement) {
+		int tLen = typeDecl.getEndOffset()
+				- typeDecl.getStartOffset() + 1;
+		KotlinElement.KotlinTypeElement element =
+				new KotlinElement.KotlinTypeElement(
+						typeDecl.getName(), cu, packageName,
+						typeDecl.getEnclosingTypeName(),
+						typeDecl.getStartOffset(), tLen,
+						typeDecl.getKind(),
+						typeDecl.getSupertypes().toArray(
+								new String[0]),
+						typeDecl.getModifiers());
+		element.setDeclaringType(enclosingTypeElement);
+		return element;
+	}
+
 	private KotlinElement createElementForDeclaration(
 			KotlinDeclaration decl,
-			KotlinDeclaration.TypeDeclaration enclosingType,
+			KotlinElement.KotlinTypeElement enclosingTypeElement,
 			KotlinCompilationUnit cu, String packageName) {
+		KotlinElement.KotlinTypeElement declaringType =
+				enclosingTypeElement != null ? enclosingTypeElement
+						: KotlinElement.buildFileFacadeType(cu,
+								packageName);
 		if (decl instanceof KotlinDeclaration.MethodDeclaration methodDecl) {
 			KotlinElement.KotlinMethodElement me =
 					createMethodElement(methodDecl, cu);
-			me.setDeclaringType(buildDeclaringTypeElement(
-					enclosingType, cu, packageName));
+			me.setDeclaringType(declaringType);
 			return me;
 		} else if (decl instanceof KotlinDeclaration.TypeDeclaration typeDecl) {
 			int sourceLength = typeDecl.getEndOffset()
 					- typeDecl.getStartOffset() + 1;
-			return new KotlinElement.KotlinTypeElement(
-					typeDecl.getName(), cu, packageName,
-					typeDecl.getEnclosingTypeName(),
-					typeDecl.getStartOffset(), sourceLength,
-					typeDecl.getKind(),
-					typeDecl.getSupertypes().toArray(new String[0]),
-					typeDecl.getModifiers());
+			KotlinElement.KotlinTypeElement te =
+					new KotlinElement.KotlinTypeElement(
+							typeDecl.getName(), cu, packageName,
+							typeDecl.getEnclosingTypeName(),
+							typeDecl.getStartOffset(), sourceLength,
+							typeDecl.getKind(),
+							typeDecl.getSupertypes().toArray(
+									new String[0]),
+							typeDecl.getModifiers());
+			te.setDeclaringType(enclosingTypeElement);
+			return te;
 		} else if (decl instanceof KotlinDeclaration.ConstructorDeclaration ctorDecl) {
 			KotlinElement.KotlinMethodElement me =
 					createConstructorElement(ctorDecl, cu);
-			me.setDeclaringType(buildDeclaringTypeElement(
-					enclosingType, cu, packageName));
+			me.setDeclaringType(declaringType);
 			return me;
 		} else if (decl instanceof KotlinDeclaration.PropertyDeclaration propDecl) {
 			int sourceLength = propDecl.getEndOffset()
@@ -1285,36 +1487,21 @@ public class KotlinSearchParticipant extends SearchParticipant {
 							KotlinElement.toTypeSignature(
 									propDecl.getTypeName()),
 							false, propDecl.getModifiers());
-			fe.setDeclaringType(buildDeclaringTypeElement(
-					enclosingType, cu, packageName));
+			fe.setDeclaringType(declaringType);
 			return fe;
 		} else if (decl instanceof KotlinDeclaration.TypeAliasDeclaration aliasDecl) {
 			int sourceLength = aliasDecl.getEndOffset()
 					- aliasDecl.getStartOffset() + 1;
-			return new KotlinElement.KotlinTypeElement(
-					aliasDecl.getName(), cu, packageName,
-					aliasDecl.getEnclosingTypeName(),
-					aliasDecl.getStartOffset(), sourceLength,
-					null, null, aliasDecl.getModifiers());
+			KotlinElement.KotlinTypeElement te =
+					new KotlinElement.KotlinTypeElement(
+							aliasDecl.getName(), cu, packageName,
+							aliasDecl.getEnclosingTypeName(),
+							aliasDecl.getStartOffset(), sourceLength,
+							null, null, aliasDecl.getModifiers());
+			te.setDeclaringType(enclosingTypeElement);
+			return te;
 		}
 		return null;
-	}
-
-	private KotlinElement.KotlinTypeElement buildDeclaringTypeElement(
-			KotlinDeclaration.TypeDeclaration enclosingType,
-			KotlinCompilationUnit cu, String packageName) {
-		if (enclosingType == null) {
-			return null;
-		}
-		int tLen = enclosingType.getEndOffset()
-				- enclosingType.getStartOffset() + 1;
-		return new KotlinElement.KotlinTypeElement(
-				enclosingType.getName(), cu, packageName,
-				enclosingType.getEnclosingTypeName(),
-				enclosingType.getStartOffset(), tLen,
-				enclosingType.getKind(),
-				enclosingType.getSupertypes().toArray(new String[0]),
-				enclosingType.getModifiers());
 	}
 
 	private KotlinElement.KotlinMethodElement createMethodElement(
@@ -1339,6 +1526,98 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		} else if (pattern instanceof FieldPattern fp) {
 			char[] key = fp.getIndexKey();
 			return key != null ? new String(key) : null;
+		}
+		return null;
+	}
+
+	private static boolean isFieldReferenceSearch(SearchPattern pattern) {
+		char[][] categories = pattern.getIndexCategories();
+		if (categories == null) return false;
+		for (char[] cat : categories) {
+			if (Arrays.equals(cat, IIndexConstants.REF)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Reverse direction: when searching for references to a Kotlin
+	 * property, also find Java getter/setter method calls. Runs a
+	 * supplementary search using only the default Java participant.
+	 */
+	private void searchJavaGetterSetterRefs(SearchPattern fieldPattern,
+			IJavaSearchScope scope, SearchRequestor requestor,
+			IProgressMonitor monitor) throws CoreException {
+		String fieldName = extractTargetName(fieldPattern);
+		if (fieldName == null) return;
+
+		List<String> methodNames = deriveGetterSetterNames(fieldName);
+		if (methodNames.isEmpty()) return;
+
+		SearchParticipant[] javaOnly = {
+				SearchEngine.getDefaultSearchParticipant() };
+		SearchEngine engine = new SearchEngine();
+
+		for (String methodName : methodNames) {
+			SearchPattern methodPattern = SearchPattern.createPattern(
+					methodName,
+					IJavaSearchConstants.METHOD,
+					IJavaSearchConstants.REFERENCES,
+					SearchPattern.R_EXACT_MATCH
+							| SearchPattern.R_CASE_SENSITIVE);
+			if (methodPattern == null) continue;
+			engine.search(methodPattern, javaOnly, scope,
+					requestor, monitor);
+		}
+	}
+
+	/**
+	 * Derives Java getter/setter method names from a Kotlin property
+	 * name. {@code name} → {@code [getName, setName]},
+	 * {@code isReady} → {@code [isReady, setReady]}.
+	 */
+	static List<String> deriveGetterSetterNames(String propertyName) {
+		if (propertyName == null || propertyName.isEmpty()) {
+			return Collections.emptyList();
+		}
+		List<String> names = new ArrayList<>(3);
+		// Kotlin boolean properties with "is" prefix: isReady → isReady
+		String lower = propertyName.toLowerCase();
+		if (lower.startsWith("is") && propertyName.length() > 2
+				&& Character.isUpperCase(propertyName.charAt(2))) {
+			names.add(propertyName); // isReady getter
+			names.add("set"
+					+ propertyName.substring(2)); // setReady
+		} else {
+			String cap = Character.toUpperCase(propertyName.charAt(0))
+					+ propertyName.substring(1);
+			names.add("get" + cap);
+			names.add("set" + cap);
+		}
+		return names;
+	}
+
+	/**
+	 * Derives the Kotlin property name from a Java getter/setter name.
+	 * {@code getCounter} → {@code counter}, {@code isReady} → {@code isReady}
+	 * (Kotlin uses {@code isX} directly), {@code setName} → {@code name}.
+	 * Returns {@code null} if the name doesn't follow getter/setter convention.
+	 */
+	static String derivePropertyName(String methodName) {
+		// JDT may pass lowercase selectors for case-insensitive patterns
+		String lower = methodName.toLowerCase();
+		if (lower.length() > 3 && lower.startsWith("get")) {
+			return Character.toLowerCase(methodName.charAt(3))
+					+ methodName.substring(4);
+		}
+		if (lower.length() > 3 && lower.startsWith("set")) {
+			return Character.toLowerCase(methodName.charAt(3))
+					+ methodName.substring(4);
+		}
+		if (lower.length() > 2 && lower.startsWith("is")) {
+			// Kotlin accesses boolean isX as obj.isX (not obj.x)
+			return methodName;
 		}
 		return null;
 	}

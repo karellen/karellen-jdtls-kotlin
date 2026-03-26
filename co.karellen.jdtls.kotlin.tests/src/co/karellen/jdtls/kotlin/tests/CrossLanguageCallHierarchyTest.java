@@ -956,4 +956,1206 @@ public class CrossLanguageCallHierarchyTest {
 				"Should find anotherJavaMethod as outgoing callee. Found: "
 						+ calleeNames);
 	}
+
+	// ---- Bug #12: top-level declarations need non-null declaring type ----
+	//
+	// JDT infrastructure assumes every IMember has a non-null declaring
+	// type. Kotlin top-level functions/properties compile to static
+	// members of a synthetic FileNameKt class. All code paths that
+	// create KotlinMethodElement or KotlinFieldElement for top-level
+	// declarations must set a file-facade declaring type.
+	//
+	// Code paths tested:
+	// 1. reportMethodMatch — declaration search (MethodPattern+DECL)
+	// 2. reportFieldMatch — declaration search (FieldPattern+DECL)
+	// 3. createElementForDeclaration — reference match enclosing element
+	// 4. KotlinModelManager.populateCompilationUnit — CU model/codeSelect
+	// 5. CalleeMethodWrapper E2E — outgoing calls with top-level callee
+	// 6. CallerMethodWrapper E2E — incoming calls from top-level caller
+
+	// ---- Path 1: reportMethodMatch (declaration search) ----
+
+	@Test
+	public void testTopLevelFunctionDeclaringTypeViaDeclarationSearch()
+			throws Exception {
+		// MethodPattern with DECLARATIONS → locateMatchesInDeclaration
+		// → reportMethodMatch creates KotlinMethodElement
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p1");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p1/MyUtils.kt",
+				"package p1\n"
+				+ "\n"
+				+ "fun topLevelFun(): String = \"hello\"\n"
+				+ "\n"
+				+ "fun anotherTopLevel(x: Int): Boolean = x > 0\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		for (String name : new String[] { "topLevelFun",
+				"anotherTopLevel" }) {
+			List<SearchMatch> matches = TestHelpers
+					.searchMethodDeclarations(name, project);
+			List<SearchMatch> ktMatches = TestHelpers
+					.filterKotlinMatches(matches);
+			assertTrue(ktMatches.size() >= 1,
+					"Should find " + name + " declaration");
+
+			IMember method = (IMember) ktMatches.get(0).getElement();
+			assertNotNull(method.getDeclaringType(),
+					"Top-level function " + name
+							+ " should have non-null declaring type");
+			assertNotNull(method.getDeclaringType()
+							.getFullyQualifiedName(),
+					"Declaring type of " + name
+							+ " should have FQN");
+			assertTrue(method.getDeclaringType()
+							.getFullyQualifiedName()
+							.contains("MyUtils"),
+					"File-facade type should contain file name. Got: "
+							+ method.getDeclaringType()
+									.getFullyQualifiedName());
+		}
+	}
+
+	// ---- Path 2: reportFieldMatch (declaration search) ----
+
+	@Test
+	public void testTopLevelPropertyDeclaringTypeViaDeclarationSearch()
+			throws Exception {
+		// FieldPattern with DECLARATIONS → locateMatchesInDeclaration
+		// → reportFieldMatch creates KotlinFieldElement
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p2");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p2/Constants.kt",
+				"package p2\n"
+				+ "\n"
+				+ "val TIMEOUT: Long = 30000L\n"
+				+ "\n"
+				+ "val MAX_RETRIES: Int = 3\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		for (String name : new String[] { "TIMEOUT", "MAX_RETRIES" }) {
+			List<SearchMatch> matches = TestHelpers
+					.searchFieldDeclarations(name, project);
+			List<SearchMatch> ktMatches = TestHelpers
+					.filterKotlinMatches(matches);
+			assertTrue(ktMatches.size() >= 1,
+					"Should find " + name + " declaration");
+
+			IMember field = (IMember) ktMatches.get(0).getElement();
+			assertNotNull(field.getDeclaringType(),
+					"Top-level property " + name
+							+ " should have non-null declaring type");
+			assertNotNull(field.getDeclaringType()
+							.getFullyQualifiedName(),
+					"Declaring type of " + name
+							+ " should have FQN");
+			assertTrue(field.getDeclaringType()
+							.getFullyQualifiedName()
+							.contains("Constants"),
+					"File-facade type should contain file name. Got: "
+							+ field.getDeclaringType()
+									.getFullyQualifiedName());
+		}
+	}
+
+	// ---- Path 3: createElementForDeclaration (reference matches) ----
+
+	@Test
+	public void testTopLevelFunctionAsEnclosingElementInReferenceSearch()
+			throws Exception {
+		// When a reference to a Java method is found inside a top-level
+		// Kotlin function, the match element is the enclosing function.
+		// createElementForDeclaration must set a declaring type on it.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p3");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p3/Target.java",
+				"package p3;\n"
+				+ "public class Target {\n"
+				+ "    public static void doSomething() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p3/TopCaller.kt",
+				"package p3\n"
+				+ "\n"
+				+ "fun topLevelCaller() {\n"
+				+ "    Target.doSomething()\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun anotherTopCaller() {\n"
+				+ "    Target.doSomething()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs = TestHelpers
+				.searchMethodReferences("doSomething", project);
+		List<SearchMatch> ktRefs = TestHelpers
+				.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find at least 2 Kotlin references to "
+						+ "doSomething. Found: " + ktRefs.size());
+
+		for (SearchMatch match : ktRefs) {
+			IMember enclosing = (IMember) match.getElement();
+			assertNotNull(enclosing.getDeclaringType(),
+					"Enclosing top-level function '"
+							+ enclosing.getElementName()
+							+ "' should have non-null declaring type");
+			assertNotNull(enclosing.getDeclaringType()
+							.getFullyQualifiedName(),
+					"Declaring type of enclosing '"
+							+ enclosing.getElementName()
+							+ "' should have FQN");
+		}
+	}
+
+	// ---- Path 4: KotlinModelManager.populateCompilationUnit ----
+
+	@Test
+	public void testTopLevelFunctionDeclaringTypeViaCUModel()
+			throws Exception {
+		// KotlinModelManager.populateCompilationUnit builds top-level
+		// functions as children of the CU. These are used by
+		// codeSelect() which is called by CallHierarchyHandler.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p4");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p4/Helpers.kt",
+				"package p4\n"
+				+ "\n"
+				+ "fun helperOne(): String = \"one\"\n"
+				+ "\n"
+				+ "val helperProp: Int = 99\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile ktFile = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/p4/Helpers.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(ktFile);
+		assertNotNull(cu, "CU should not be null");
+
+		IJavaElement[] children = cu.getChildren();
+		boolean foundMethod = false;
+		boolean foundField = false;
+		for (IJavaElement child : children) {
+			if (child instanceof IMethod m
+					&& "helperOne".equals(m.getElementName())) {
+				foundMethod = true;
+				assertNotNull(((IMember) m).getDeclaringType(),
+						"Top-level function helperOne from CU model "
+								+ "should have non-null declaring type");
+			}
+			if (child instanceof KotlinElement.KotlinFieldElement f
+					&& "helperProp".equals(f.getElementName())) {
+				foundField = true;
+				assertNotNull(f.getDeclaringType(),
+						"Top-level property helperProp from CU model "
+								+ "should have non-null declaring type");
+			}
+		}
+		assertTrue(foundMethod,
+				"Should find helperOne in CU children");
+		assertTrue(foundField,
+				"Should find helperProp in CU children");
+	}
+
+	// ---- Path 5: E2E outgoing calls with top-level callee ----
+
+	@Test
+	public void testOutgoingCallsWithTopLevelFunctionCallee()
+			throws Exception {
+		// CalleeMethodWrapper.findCalleesFromParticipants → resolveCallee
+		// finds a KotlinMethodElement → CallSearchResultCollector.addMember
+		// → isIgnored → getTypeOfElement(callee).getFullyQualifiedName()
+		// NPE when declaring type is null.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p5");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p5/Utils.kt",
+				"package p5\n"
+				+ "\n"
+				+ "fun <T> dslFor(block: () -> T): T = block()\n"
+				+ "\n"
+				+ "fun helperFunction(s: String): Int = s.length\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p5/Service.kt",
+				"package p5\n"
+				+ "\n"
+				+ "class Service {\n"
+				+ "    fun doWork(): Int {\n"
+				+ "        val result = dslFor {"
+				+ " helperFunction(\"test\") }\n"
+				+ "        return result\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("doWork", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find doWork declaration");
+
+		IMember kotlinMethod = (IMember) ktMatches.get(0).getElement();
+
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCalleeRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		// This call throws NPE without the fix
+		MethodWrapper[] callees = roots[0].getCalls(
+				new NullProgressMonitor());
+
+		Set<String> calleeNames = new HashSet<>();
+		for (MethodWrapper callee : callees) {
+			calleeNames.add(callee.getMember().getElementName());
+		}
+		assertTrue(calleeNames.contains("dslFor"),
+				"Should find top-level dslFor. Found: " + calleeNames);
+		assertTrue(calleeNames.contains("helperFunction"),
+				"Should find top-level helperFunction. Found: "
+						+ calleeNames);
+	}
+
+	// ---- Path 6: E2E incoming calls from top-level caller ----
+
+	@Test
+	public void testIncomingCallsFromTopLevelFunction()
+			throws Exception {
+		// CallerMethodWrapper uses SearchEngine to find callers.
+		// When the caller is a top-level Kotlin function, the match
+		// element must have a non-null declaring type for
+		// CallSearchResultCollector.isIgnored and for
+		// toCallHierarchyItem in jdtls.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p6");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p6/Api.java",
+				"package p6;\n"
+				+ "public class Api {\n"
+				+ "    public static String fetchData() {"
+				+ " return \"data\"; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p6/TopConsumer.kt",
+				"package p6\n"
+				+ "\n"
+				+ "fun consumeFromTop(): String {\n"
+				+ "    return Api.fetchData()\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun anotherConsumer(): String {\n"
+				+ "    return Api.fetchData()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Find the Java method
+		ICompilationUnit javaCu = TestHelpers.getJavaCompilationUnit(
+				project, "p6", "Api.java");
+		assertNotNull(javaCu, "Java CU should exist");
+		IType apiType = javaCu.getType("Api");
+		IMethod fetchData = apiType.getMethod("fetchData",
+				new String[0]);
+		assertTrue(fetchData.exists(),
+				"Api.fetchData() should exist");
+
+		// Incoming calls via CallHierarchyCore
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { fetchData });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+
+		Set<String> callerNames = new HashSet<>();
+		for (MethodWrapper caller : callers) {
+			IMember member = caller.getMember();
+			callerNames.add(member.getElementName());
+			// The declaring type must be non-null for
+			// CallHierarchyHandler.toCallHierarchyItem to work
+			assertNotNull(member.getDeclaringType(),
+					"Top-level caller '" + member.getElementName()
+							+ "' should have non-null declaring type");
+		}
+		assertTrue(callerNames.contains("consumeFromTop"),
+				"Should find consumeFromTop as caller. Found: "
+						+ callerNames);
+		assertTrue(callerNames.contains("anotherConsumer"),
+				"Should find anotherConsumer as caller. Found: "
+						+ callerNames);
+	}
+
+	// ---- Top-level extension functions (variant of path 1) ----
+
+	@Test
+	public void testTopLevelExtensionFunctionDeclaringType()
+			throws Exception {
+		// Extension functions are also top-level — they must also have
+		// a file-facade declaring type.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/p7");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/p7/Extensions.kt",
+				"package p7\n"
+				+ "\n"
+				+ "fun String.greet(): String = \"Hello, $this!\"\n"
+				+ "\n"
+				+ "fun Int.isEven(): Boolean = this % 2 == 0\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		for (String name : new String[] { "greet", "isEven" }) {
+			List<SearchMatch> matches = TestHelpers
+					.searchMethodDeclarations(name, project);
+			List<SearchMatch> ktMatches = TestHelpers
+					.filterKotlinMatches(matches);
+			assertTrue(ktMatches.size() >= 1,
+					"Should find " + name + " declaration");
+
+			IMember method = (IMember) ktMatches.get(0).getElement();
+			assertNotNull(method.getDeclaringType(),
+					"Top-level extension " + name
+							+ " should have non-null declaring type");
+			assertTrue(method.getDeclaringType()
+							.getFullyQualifiedName()
+							.contains("Extensions"),
+					"File-facade type should contain 'Extensions'. "
+							+ "Got: " + method.getDeclaringType()
+									.getFullyQualifiedName());
+		}
+	}
+
+	// ---- Nested type declaring type ----
+
+	@Test
+	public void testNestedTypeDeclaringTypeNotNull() throws Exception {
+		// KotlinTypeElement inherits base getDeclaringType() which
+		// returns null. For nested types (Inner inside Outer),
+		// getDeclaringType() should return the enclosing type.
+		// JDT uses this for parent navigation, breadcrumbs, and
+		// call hierarchy type resolution.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/nested");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nested/Outer.kt",
+				"package nested\n"
+				+ "\n"
+				+ "class Outer {\n"
+				+ "    class Inner {\n"
+				+ "        fun innerMethod(): String = \"inner\"\n"
+				+ "    }\n"
+				+ "    class AnotherInner {\n"
+				+ "        fun anotherMethod(): Int = 42\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Find Inner class via type declaration search
+		SearchPattern pattern = SearchPattern.createPattern(
+				"Inner", IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_EXACT_MATCH);
+		List<SearchMatch> matches = new ArrayList<>();
+		new SearchEngine().search(pattern,
+				SearchEngine.getSearchParticipants(),
+				SearchEngine.createJavaSearchScope(
+						new IJavaProject[] { project }),
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch match) {
+						matches.add(match);
+					}
+				}, new NullProgressMonitor());
+
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find Inner type declaration");
+
+		IType innerType = (IType) ktMatches.get(0).getElement();
+		assertNotNull(innerType.getDeclaringType(),
+				"Nested type Inner should have non-null "
+						+ "declaring type (Outer)");
+		assertEquals("Outer",
+				innerType.getDeclaringType().getElementName(),
+				"Inner's declaring type should be Outer");
+	}
+
+	@Test
+	public void testNestedTypeMethodDeclaringTypeChain()
+			throws Exception {
+		// Method inside nested type: method.getDeclaringType() should
+		// return the nested type, which in turn should have
+		// getDeclaringType() returning the outer type.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/chain");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/chain/Container.kt",
+				"package chain\n"
+				+ "\n"
+				+ "class Container {\n"
+				+ "    class Nested {\n"
+				+ "        fun nestedWork(): Boolean = true\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("nestedWork", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find nestedWork declaration");
+
+		IMember method = (IMember) ktMatches.get(0).getElement();
+		IType declaringType = method.getDeclaringType();
+		assertNotNull(declaringType,
+				"nestedWork should have declaring type");
+		assertEquals("Nested", declaringType.getElementName(),
+				"nestedWork's declaring type should be Nested");
+
+		// Nested's declaring type should be Container
+		assertNotNull(declaringType.getDeclaringType(),
+				"Nested should have declaring type Container");
+		assertEquals("Container",
+				declaringType.getDeclaringType().getElementName(),
+				"Nested's declaring type should be Container");
+	}
+
+	// ---- Outgoing calls from nested type method ----
+
+	@Test
+	public void testOutgoingCallsFromNestedTypeMethod()
+			throws Exception {
+		// Outgoing call hierarchy from a method inside a nested type.
+		// The caller member's declaring type chain must be intact for
+		// CallSearchResultCollector.isIgnored() to work.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/nestcall");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nestcall/Api.java",
+				"package nestcall;\n"
+				+ "public class Api {\n"
+				+ "    public static void apiCall() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nestcall/Wrapper.kt",
+				"package nestcall\n"
+				+ "\n"
+				+ "class Wrapper {\n"
+				+ "    class Handler {\n"
+				+ "        fun handle() {\n"
+				+ "            Api.apiCall()\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("handle", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find handle declaration");
+
+		IMember kotlinMethod = (IMember) ktMatches.get(0).getElement();
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCalleeRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callees = roots[0].getCalls(
+				new NullProgressMonitor());
+		Set<String> calleeNames = new HashSet<>();
+		for (MethodWrapper callee : callees) {
+			calleeNames.add(callee.getMember().getElementName());
+		}
+		assertTrue(calleeNames.contains("apiCall"),
+				"Should find apiCall as outgoing callee from nested "
+						+ "type method. Found: " + calleeNames);
+	}
+
+	// ---- Incoming calls to nested type method ----
+
+	@Test
+	public void testIncomingCallsToNestedTypeMethod()
+			throws Exception {
+		// Incoming call hierarchy where the caller is inside a nested
+		// Kotlin type. The match element's declaring type chain must
+		// be non-null for CallSearchResultCollector.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/nestin");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nestin/Target.java",
+				"package nestin;\n"
+				+ "public class Target {\n"
+				+ "    public static int compute() { return 1; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nestin/Caller.kt",
+				"package nestin\n"
+				+ "\n"
+				+ "class Caller {\n"
+				+ "    class Inner {\n"
+				+ "        fun callFromInner(): Int {\n"
+				+ "            return Target.compute()\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		ICompilationUnit javaCu = TestHelpers.getJavaCompilationUnit(
+				project, "nestin", "Target.java");
+		IType targetType = javaCu.getType("Target");
+		IMethod compute = targetType.getMethod("compute",
+				new String[0]);
+		assertTrue(compute.exists(), "Target.compute() should exist");
+
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { compute });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+		boolean found = false;
+		for (MethodWrapper caller : callers) {
+			IMember member = caller.getMember();
+			if ("callFromInner".equals(member.getElementName())) {
+				found = true;
+				assertNotNull(member.getDeclaringType(),
+						"callFromInner should have declaring type");
+				assertEquals("Inner",
+						member.getDeclaringType().getElementName(),
+						"callFromInner's declaring type should be "
+								+ "Inner");
+			}
+		}
+		assertTrue(found,
+				"Should find callFromInner as caller. Found: "
+						+ Arrays.stream(callers)
+								.map(c -> c.getMember()
+										.getElementName())
+								.collect(Collectors.joining(", ")));
+	}
+
+	// ---- CU model for nested types ----
+
+	@Test
+	public void testNestedTypeDeclaringTypeViaCUModel()
+			throws Exception {
+		// KotlinModelManager.populateCompilationUnit builds type
+		// elements. Nested types via CU model (used by codeSelect)
+		// should have declaring type set.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/cumodel");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/cumodel/Parent.kt",
+				"package cumodel\n"
+				+ "\n"
+				+ "class Parent {\n"
+				+ "    class Child {\n"
+				+ "        fun childMethod() {}\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile ktFile = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/cumodel/Parent.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(ktFile);
+		assertNotNull(cu, "CU should not be null");
+
+		// Find the Parent type in CU model
+		IType[] types = cu.getTypes();
+		assertTrue(types.length >= 1, "Should have at least one type");
+		IType parentType = null;
+		for (IType t : types) {
+			if ("Parent".equals(t.getElementName())) {
+				parentType = t;
+			}
+		}
+		assertNotNull(parentType, "Should find Parent type");
+
+		// Parent's declaring type should be null (top-level type)
+		// — this is correct; top-level types don't have a declaring type
+
+		// Find Child as a nested type within Parent's children
+		IJavaElement[] children = parentType.getChildren();
+		IType childType = null;
+		for (IJavaElement child : children) {
+			if (child instanceof IType t
+					&& "Child".equals(t.getElementName())) {
+				childType = t;
+			}
+		}
+		assertNotNull(childType, "Should find Child in Parent's "
+				+ "children");
+		assertNotNull(childType.getDeclaringType(),
+				"Nested type Child should have non-null declaring "
+						+ "type via CU model");
+		assertEquals("Parent",
+				childType.getDeclaringType().getElementName(),
+				"Child's declaring type should be Parent");
+	}
+
+	// ---- Deep nesting (3+ levels) ----
+	//
+	// Parser stores enclosingTypeName as peek() from a stack, which
+	// only gives the immediate parent name. For Outer.Middle.Inner,
+	// Inner gets enclosingTypeName="Middle" instead of "Outer.Middle".
+	// This breaks FQN construction, declaring type chains, and search.
+
+	@Test
+	public void testDeeplyNestedTypeFQN() throws Exception {
+		// 3-level nesting: Outer > Middle > Inner
+		// Inner.getFullyQualifiedName() must be "deep.Outer.Middle.Inner"
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/deep");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deep/Outer.kt",
+				"package deep\n"
+				+ "\n"
+				+ "class Outer {\n"
+				+ "    class Middle {\n"
+				+ "        class Inner {\n"
+				+ "            fun innerMethod(): String = \"deep\"\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for Inner type
+		SearchPattern pattern = SearchPattern.createPattern(
+				"Inner", IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_EXACT_MATCH);
+		List<SearchMatch> matches = new ArrayList<>();
+		new SearchEngine().search(pattern,
+				SearchEngine.getSearchParticipants(),
+				SearchEngine.createJavaSearchScope(
+						new IJavaProject[] { project }),
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch match) {
+						matches.add(match);
+					}
+				}, new NullProgressMonitor());
+
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find Inner type declaration");
+
+		IType innerType = (IType) ktMatches.get(0).getElement();
+		assertEquals("deep.Outer.Middle.Inner",
+				innerType.getFullyQualifiedName(),
+				"3-level nested type FQN should include full chain");
+	}
+
+	@Test
+	public void testDeeplyNestedDeclaringTypeChain() throws Exception {
+		// Full declaring type chain: Inner → Middle → Outer
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/chain3");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/chain3/A.kt",
+				"package chain3\n"
+				+ "\n"
+				+ "class A {\n"
+				+ "    class B {\n"
+				+ "        class C {\n"
+				+ "            fun cMethod(): Int = 1\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("cMethod", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find cMethod declaration");
+
+		IMember method = (IMember) ktMatches.get(0).getElement();
+		IType c = method.getDeclaringType();
+		assertNotNull(c, "cMethod declaring type should be C");
+		assertEquals("C", c.getElementName());
+
+		IType b = c.getDeclaringType();
+		assertNotNull(b, "C's declaring type should be B");
+		assertEquals("B", b.getElementName());
+
+		IType a = b.getDeclaringType();
+		assertNotNull(a, "B's declaring type should be A");
+		assertEquals("A", a.getElementName());
+	}
+
+	@Test
+	public void testDeeplyNestedOutgoingCallHierarchy() throws Exception {
+		// Outgoing calls from a method 3 levels deep should not throw
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/deepcall");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepcall/Api.java",
+				"package deepcall;\n"
+				+ "public class Api {\n"
+				+ "    public static void deepTarget() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepcall/Levels.kt",
+				"package deepcall\n"
+				+ "\n"
+				+ "class Level1 {\n"
+				+ "    class Level2 {\n"
+				+ "        class Level3 {\n"
+				+ "            fun callFromDeep() {\n"
+				+ "                Api.deepTarget()\n"
+				+ "            }\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("callFromDeep", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find callFromDeep declaration");
+
+		IMember kotlinMethod = (IMember) ktMatches.get(0).getElement();
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCalleeRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callees = roots[0].getCalls(
+				new NullProgressMonitor());
+		Set<String> calleeNames = new HashSet<>();
+		for (MethodWrapper callee : callees) {
+			calleeNames.add(callee.getMember().getElementName());
+		}
+		assertTrue(calleeNames.contains("deepTarget"),
+				"Should find deepTarget from 3-level nested caller. "
+						+ "Found: " + calleeNames);
+	}
+
+	@Test
+	public void testDeeplyNestedIncomingCallHierarchy() throws Exception {
+		// Incoming calls where the Kotlin caller is 3 levels deep
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/deepin");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepin/Target.java",
+				"package deepin;\n"
+				+ "public class Target {\n"
+				+ "    public static int getValue() { return 42; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepin/Deep.kt",
+				"package deepin\n"
+				+ "\n"
+				+ "class Outer {\n"
+				+ "    class Middle {\n"
+				+ "        class Inner {\n"
+				+ "            fun useTarget(): Int {\n"
+				+ "                return Target.getValue()\n"
+				+ "            }\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		ICompilationUnit javaCu = TestHelpers.getJavaCompilationUnit(
+				project, "deepin", "Target.java");
+		IType targetType = javaCu.getType("Target");
+		IMethod getValue = targetType.getMethod("getValue",
+				new String[0]);
+		assertTrue(getValue.exists(), "Target.getValue() should exist");
+
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { getValue });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+		boolean found = false;
+		for (MethodWrapper caller : callers) {
+			IMember member = caller.getMember();
+			if ("useTarget".equals(member.getElementName())) {
+				found = true;
+				// Verify the full declaring type chain
+				IType inner = member.getDeclaringType();
+				assertNotNull(inner,
+						"useTarget declaring type should be Inner");
+				assertEquals("Inner", inner.getElementName());
+				IType middle = inner.getDeclaringType();
+				assertNotNull(middle,
+						"Inner's declaring type should be Middle");
+				assertEquals("Middle", middle.getElementName());
+			}
+		}
+		assertTrue(found,
+				"Should find useTarget as caller. Found: "
+						+ Arrays.stream(callers)
+								.map(c -> c.getMember()
+										.getElementName())
+								.collect(Collectors.joining(", ")));
+	}
+
+	@Test
+	public void testDeeplyNestedReferenceMatchEnclosingElement()
+			throws Exception {
+		// Reference to a Java method from inside a 3-level nested type.
+		// The match element should have the full declaring type chain.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/deepref");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepref/Service.java",
+				"package deepref;\n"
+				+ "public class Service {\n"
+				+ "    public static void serve() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/deepref/Nested.kt",
+				"package deepref\n"
+				+ "\n"
+				+ "class L1 {\n"
+				+ "    class L2 {\n"
+				+ "        class L3 {\n"
+				+ "            fun callServe() {\n"
+				+ "                Service.serve()\n"
+				+ "            }\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs = TestHelpers
+				.searchMethodReferences("serve", project);
+		List<SearchMatch> ktRefs = TestHelpers
+				.filterKotlinMatches(refs);
+		assertTrue(ktRefs.size() >= 1,
+				"Should find Kotlin reference to serve");
+
+		IMember enclosing = (IMember) ktRefs.get(0).getElement();
+		assertEquals("callServe", enclosing.getElementName());
+
+		// Verify declaring type chain: callServe → L3 → L2 → L1
+		IType l3 = enclosing.getDeclaringType();
+		assertNotNull(l3, "callServe declaring type should be L3");
+		assertEquals("L3", l3.getElementName());
+
+		IType l2 = l3.getDeclaringType();
+		assertNotNull(l2, "L3's declaring type should be L2");
+		assertEquals("L2", l2.getElementName());
+
+		IType l1 = l2.getDeclaringType();
+		assertNotNull(l1, "L2's declaring type should be L1");
+		assertEquals("L1", l1.getElementName());
+	}
+
+	@Test
+	public void testDeeplyNestedCUModelDeclaringTypeChain()
+			throws Exception {
+		// CU model path: nested types via getChildren() should
+		// have the full declaring type chain at arbitrary depth
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/cudeep");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/cudeep/Root.kt",
+				"package cudeep\n"
+				+ "\n"
+				+ "class Root {\n"
+				+ "    class Branch {\n"
+				+ "        class Leaf {\n"
+				+ "            fun leafFun() {}\n"
+				+ "        }\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile ktFile = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/cudeep/Root.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(ktFile);
+		assertNotNull(cu, "CU should not be null");
+
+		// Walk: Root → Branch → Leaf
+		IType[] types = cu.getTypes();
+		IType root = null;
+		for (IType t : types) {
+			if ("Root".equals(t.getElementName())) {
+				root = t;
+			}
+		}
+		assertNotNull(root, "Should find Root type");
+
+		// Find Branch in Root's children
+		IType branch = null;
+		for (IJavaElement child : root.getChildren()) {
+			if (child instanceof IType t
+					&& "Branch".equals(t.getElementName())) {
+				branch = t;
+			}
+		}
+		assertNotNull(branch, "Should find Branch in Root");
+		assertNotNull(branch.getDeclaringType(),
+				"Branch should have declaring type");
+		assertEquals("Root", branch.getDeclaringType().getElementName(),
+				"Branch's declaring type should be Root");
+
+		// Find Leaf in Branch's children
+		IType leaf = null;
+		for (IJavaElement child : branch.getChildren()) {
+			if (child instanceof IType t
+					&& "Leaf".equals(t.getElementName())) {
+				leaf = t;
+			}
+		}
+		assertNotNull(leaf, "Should find Leaf in Branch");
+		assertNotNull(leaf.getDeclaringType(),
+				"Leaf should have declaring type");
+		assertEquals("Branch",
+				leaf.getDeclaringType().getElementName(),
+				"Leaf's declaring type should be Branch");
+
+		// Leaf → Branch → Root chain
+		assertNotNull(leaf.getDeclaringType().getDeclaringType(),
+				"Branch (from Leaf) should have declaring type Root");
+		assertEquals("Root",
+				leaf.getDeclaringType().getDeclaringType()
+						.getElementName(),
+				"Full chain: Leaf → Branch → Root");
+	}
+
+	// ---- Bug #12, Bug 2: Kotlin property-style access to Java getters ----
+	//
+	// In Kotlin, `obj.field` accesses a Java getter `getField()`.
+	// Incoming call hierarchy on the Java getter should find Kotlin
+	// callers that use property syntax. Similarly, `obj.field = x`
+	// accesses `setField(x)`.
+
+	@Test
+	public void testIncomingCallsJavaGetterFromKotlinPropertyAccess()
+			throws Exception {
+		// Java class with getter, Kotlin accesses via property syntax
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/propget");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/propget/Metrics.java",
+				"package propget;\n"
+				+ "public class Metrics {\n"
+				+ "    private int counter;\n"
+				+ "    public int getCounter() { return counter; }\n"
+				+ "    public void setCounter(int c) {"
+				+ " this.counter = c; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/propget/Consumer.kt",
+				"package propget\n"
+				+ "\n"
+				+ "class Consumer(private val metrics: Metrics) {\n"
+				+ "    fun readMetric(): Int {\n"
+				+ "        return metrics.counter\n"
+				+ "    }\n"
+				+ "    fun writeMetric(value: Int) {\n"
+				+ "        metrics.counter = value\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Find the Java getter
+		ICompilationUnit javaCu = TestHelpers.getJavaCompilationUnit(
+				project, "propget", "Metrics.java");
+		IType metricsType = javaCu.getType("Metrics");
+		IMethod getCounter = metricsType.getMethod("getCounter",
+				new String[0]);
+		assertTrue(getCounter.exists(),
+				"Metrics.getCounter() should exist");
+
+		// Incoming calls should find Kotlin property-style access
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { getCounter });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+		boolean found = false;
+		for (MethodWrapper caller : callers) {
+			if ("readMetric".equals(
+					caller.getMember().getElementName())) {
+				found = true;
+			}
+		}
+		assertTrue(found,
+				"Incoming calls to getCounter() should find "
+						+ "Kotlin readMetric() which uses "
+						+ "metrics.counter (property syntax). Found: "
+						+ Arrays.stream(callers)
+								.map(c -> c.getMember()
+										.getElementName())
+								.collect(Collectors.joining(", ")));
+	}
+
+	@Test
+	public void testReferenceSearchJavaGetterFromKotlinPropertyAccess()
+			throws Exception {
+		// Lower-level test: search for references to getCounter()
+		// should find Kotlin property-style access metrics.counter
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/propref");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/propref/Data.java",
+				"package propref;\n"
+				+ "public class Data {\n"
+				+ "    private String name;\n"
+				+ "    public String getName() { return name; }\n"
+				+ "    public void setName(String n) {"
+				+ " this.name = n; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/propref/Reader.kt",
+				"package propref\n"
+				+ "\n"
+				+ "fun readName(d: Data): String {\n"
+				+ "    return d.name\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun writeName(d: Data, n: String) {\n"
+				+ "    d.name = n\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for references to getName via SearchEngine
+		List<SearchMatch> refs = TestHelpers
+				.searchMethodReferences("getName", project);
+		List<SearchMatch> ktRefs = TestHelpers
+				.filterKotlinMatches(refs);
+
+		assertTrue(ktRefs.size() >= 1,
+				"Reference search for getName() should find Kotlin "
+						+ "property-style access d.name. "
+						+ "Total refs: " + refs.size()
+						+ ", Kotlin refs: " + ktRefs.size());
+	}
+
+	@Test
+	public void testReferenceSearchJavaGetterWithAcronymPropertyName()
+			throws Exception {
+		// Java getter getPPInsertTimer() for property ppInsertTimer
+		// — consecutive lowercase chars at start form an acronym in getter
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/acronym");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/acronym/Metrics.java",
+				"package acronym;\n"
+				+ "public class Metrics {\n"
+				+ "    private int ppInsertTimer;\n"
+				+ "    private String dbUrl;\n"
+				+ "    public int getPPInsertTimer() {"
+				+ " return ppInsertTimer; }\n"
+				+ "    public String getDBUrl() {"
+				+ " return dbUrl; }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/acronym/User.kt",
+				"package acronym\n"
+				+ "\n"
+				+ "fun useMetrics(m: Metrics) {\n"
+				+ "    val timer = m.ppInsertTimer\n"
+				+ "    val url = m.dbUrl\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Element-based search (like CallerMethodWrapper uses)
+		IType metricsType = project.findType("acronym.Metrics");
+		assertNotNull(metricsType, "Metrics type should exist");
+
+		// Search for getPPInsertTimer references
+		IMethod ppMethod = metricsType.getMethod(
+				"getPPInsertTimer", new String[0]);
+		assertTrue(ppMethod.exists(),
+				"getPPInsertTimer() should exist");
+		SearchPattern ppPattern = SearchPattern.createPattern(
+				ppMethod, IJavaSearchConstants.REFERENCES);
+		List<SearchMatch> ppRefs = TestHelpers.executeSearch(
+				ppPattern, project);
+		List<SearchMatch> ppKtRefs = TestHelpers
+				.filterKotlinMatches(ppRefs);
+		assertTrue(ppKtRefs.size() >= 1,
+				"Element-based search for getPPInsertTimer() "
+						+ "should find Kotlin m.ppInsertTimer. "
+						+ "Total: " + ppRefs.size()
+						+ ", Kotlin: " + ppKtRefs.size());
+
+		// Search for getDBUrl references
+		IMethod dbMethod = metricsType.getMethod(
+				"getDBUrl", new String[0]);
+		assertTrue(dbMethod.exists(), "getDBUrl() should exist");
+		SearchPattern dbPattern = SearchPattern.createPattern(
+				dbMethod, IJavaSearchConstants.REFERENCES);
+		List<SearchMatch> dbRefs = TestHelpers.executeSearch(
+				dbPattern, project);
+		List<SearchMatch> dbKtRefs = TestHelpers
+				.filterKotlinMatches(dbRefs);
+		assertTrue(dbKtRefs.size() >= 1,
+				"Element-based search for getDBUrl() "
+						+ "should find Kotlin m.dbUrl. "
+						+ "Total: " + dbRefs.size()
+						+ ", Kotlin: " + dbKtRefs.size());
+
+		// Also verify string-based search works
+		List<SearchMatch> strRefs = TestHelpers
+				.searchMethodReferences("getPPInsertTimer", project);
+		List<SearchMatch> strKtRefs = TestHelpers
+				.filterKotlinMatches(strRefs);
+		assertTrue(strKtRefs.size() >= 1,
+				"String-based search for getPPInsertTimer() "
+						+ "should find Kotlin m.ppInsertTimer. "
+						+ "Total: " + strRefs.size()
+						+ ", Kotlin: " + strKtRefs.size());
+	}
+
+	@Test
+	public void testReverseSearchKotlinPropertyFindsJavaGetterCalls()
+			throws Exception {
+		// Reverse direction: searching for references to a Kotlin
+		// property should find Java getter/setter calls.
+		// Kotlin: class Person { var name: String = "" }
+		// Java: person.getName(), person.setName("x")
+		// Search for field "name" references → should find Java calls
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/reverse");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/reverse/Person.kt",
+				"package reverse\n"
+				+ "\n"
+				+ "class Person {\n"
+				+ "    var name: String = \"\"\n"
+				+ "    var age: Int = 0\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/reverse/JavaCaller.java",
+				"package reverse;\n"
+				+ "public class JavaCaller {\n"
+				+ "    public void readPerson(Person p) {\n"
+				+ "        String n = p.getName();\n"
+				+ "        int a = p.getAge();\n"
+				+ "    }\n"
+				+ "    public void writePerson(Person p) {\n"
+				+ "        p.setName(\"Alice\");\n"
+				+ "        p.setAge(30);\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for field "name" references — should find Java
+		// getName()/setName() calls
+		List<SearchMatch> nameRefs = TestHelpers
+				.searchFieldReferences("name", project);
+		List<SearchMatch> nameJavaRefs = nameRefs.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName()
+								.endsWith(".java"))
+				.toList();
+		assertTrue(nameJavaRefs.size() >= 2,
+				"Field search for 'name' should find Java "
+						+ "getName() and setName() calls. "
+						+ "Total: " + nameRefs.size()
+						+ ", Java: " + nameJavaRefs.size());
+
+		// Search for field "age" references too
+		List<SearchMatch> ageRefs = TestHelpers
+				.searchFieldReferences("age", project);
+		List<SearchMatch> ageJavaRefs = ageRefs.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName()
+								.endsWith(".java"))
+				.toList();
+		assertTrue(ageJavaRefs.size() >= 2,
+				"Field search for 'age' should find Java "
+						+ "getAge() and setAge() calls. "
+						+ "Total: " + ageRefs.size()
+						+ ", Java: " + ageJavaRefs.size());
+	}
 }
