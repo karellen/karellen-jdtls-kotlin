@@ -57,6 +57,7 @@ import org.eclipse.jdt.internal.core.search.indexing.IIndexConstants;
 import org.eclipse.jdt.internal.core.search.indexing.IndexManager;
 import org.eclipse.jdt.internal.core.search.matching.FieldPattern;
 import org.eclipse.jdt.internal.core.search.matching.MethodPattern;
+import org.eclipse.jdt.internal.core.search.matching.OrPattern;
 import org.eclipse.jdt.internal.core.search.matching.SuperTypeReferencePattern;
 import org.eclipse.jdt.internal.core.search.matching.TypeDeclarationPattern;
 import org.eclipse.jdt.internal.core.search.matching.TypeReferencePattern;
@@ -138,6 +139,26 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 		// Register types in symbol table
 		modelManager.getSymbolTable().addTypesFromFile(path, typeSymbols);
+
+		// Index file-facade TYPE_DECL when top-level functions or
+		// properties exist. The Kotlin compiler generates a JVM class
+		// named FileNameKt for top-level declarations; this entry
+		// makes the facade discoverable by Java go-to-definition and
+		// hover (e.g., Java importing FooKt).
+		if (hasTopLevelDeclarations(fileModel)) {
+			String facadeName = deriveFacadeClassName(path);
+			if (facadeName != null) {
+				char[] facadeKey = TypeDeclarationPattern.createIndexKey(
+						0,
+						facadeName.toCharArray(),
+						packageName != null
+								? packageName.toCharArray() : null,
+						null,
+						false);
+				document.addIndexEntry(IIndexConstants.TYPE_DECL,
+						facadeKey);
+			}
+		}
 
 		// Register top-level functions and properties in symbol table
 		for (KotlinDeclaration decl : fileModel.getDeclarations()) {
@@ -308,6 +329,23 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			return;
 		}
 		document.addIndexEntry(IIndexConstants.FIELD_DECL, name.toCharArray());
+
+		// Emit METHOD_DECL entries for JVM-generated getter/setter.
+		// This makes properties discoverable via method declaration
+		// searches (e.g., Java → Kotlin go-to-definition on getFoo).
+		String capitalized = Character.toUpperCase(name.charAt(0))
+				+ name.substring(1);
+		char[] getKey = MethodPattern.createIndexKey(
+				("get" + capitalized).toCharArray(), 0);
+		document.addIndexEntry(IIndexConstants.METHOD_DECL, getKey);
+		char[] isKey = MethodPattern.createIndexKey(
+				("is" + capitalized).toCharArray(), 0);
+		document.addIndexEntry(IIndexConstants.METHOD_DECL, isKey);
+		if (propDecl.isMutable()) {
+			char[] setKey = MethodPattern.createIndexKey(
+					("set" + capitalized).toCharArray(), 1);
+			document.addIndexEntry(IIndexConstants.METHOD_DECL, setKey);
+		}
 	}
 
 	private void indexConstructorDeclaration(SearchDocument document,
@@ -509,6 +547,17 @@ public class KotlinSearchParticipant extends SearchParticipant {
 	public void locateMatches(SearchDocument[] documents, SearchPattern pattern,
 			IJavaSearchScope scope, SearchRequestor requestor,
 			IProgressMonitor monitor) throws CoreException {
+		// OrPattern wraps multiple sub-patterns (e.g., REFERENCES + DECLARATIONS
+		// when includeDeclaration=true). Unwrap and process each sub-pattern
+		// individually so our instanceof dispatch handles them correctly.
+		if (pattern instanceof OrPattern orPattern) {
+			for (SearchPattern subPattern : orPattern.getPatterns()) {
+				locateMatches(documents, subPattern, scope,
+						requestor, monitor);
+			}
+			return;
+		}
+
 		for (SearchDocument document : documents) {
 			if (monitor != null && monitor.isCanceled()) {
 				return;
@@ -593,6 +642,17 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			if (doDeclarations) {
 				for (KotlinDeclaration decl : fileModel.getDeclarations()) {
 					locateMatchesInDeclaration(decl, null, pattern,
+							cu, requestor, packageName);
+				}
+				// Match facade class name for TypeDeclarationPattern
+				if (pattern instanceof TypeDeclarationPattern tdp) {
+					locateFacadeTypeMatch(tdp, fileModel, cu,
+							requestor, packageName, path);
+				}
+				// Match getter/setter method patterns against
+				// top-level properties (JVM generates accessors)
+				if (pattern instanceof MethodPattern mp) {
+					locatePropertyAccessorMatches(mp, fileModel,
 							cu, requestor, packageName);
 				}
 			}
@@ -688,6 +748,14 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					reportFieldMatch(propDecl, enclosingTypeElement,
 							cu, requestor, packageName);
 				}
+			} else if (pattern instanceof MethodPattern mp) {
+				// Match getter/setter patterns against properties.
+				// JVM generates getX()/setX()/isX() for Kotlin
+				// property x.
+				if (matchesPropertyAccessor(propDecl, mp)) {
+					reportFieldMatch(propDecl, enclosingTypeElement,
+							cu, requestor, packageName);
+				}
 			}
 		} else if (decl instanceof KotlinDeclaration.TypeAliasDeclaration aliasDecl) {
 			if (pattern instanceof TypeDeclarationPattern tdp) {
@@ -695,6 +763,62 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					reportTypeAliasMatch(aliasDecl, cu, requestor,
 							packageName);
 				}
+			}
+		}
+	}
+
+	/**
+	 * Matches facade class name (e.g., {@code FooKt} for {@code Foo.kt})
+	 * against a TypeDeclarationPattern. Reports a match using the
+	 * file-facade type element.
+	 */
+	private void locateFacadeTypeMatch(TypeDeclarationPattern tdp,
+			KotlinFileModel fileModel, KotlinCompilationUnit cu,
+			SearchRequestor requestor, String packageName,
+			String path) throws CoreException {
+		if (tdp.simpleName == null) {
+			return;
+		}
+		String facadeName = deriveFacadeClassName(path);
+		if (facadeName == null) {
+			return;
+		}
+		if (!hasTopLevelDeclarations(fileModel)) {
+			return;
+		}
+		if (facadeName.equalsIgnoreCase(new String(tdp.simpleName))) {
+			KotlinElement.KotlinTypeElement facadeType =
+					KotlinElement.buildFileFacadeType(cu, packageName);
+			SearchMatch match = new SearchMatch(facadeType,
+					SearchMatch.A_ACCURATE, 0, 0, this,
+					cu.getResource());
+			requestor.acceptSearchMatch(match);
+		}
+	}
+
+	/**
+	 * Matches getter/setter method patterns against top-level Kotlin
+	 * properties. JVM generates {@code getFoo()}/{@code setFoo()} for
+	 * Kotlin property {@code foo}.
+	 */
+	private void locatePropertyAccessorMatches(MethodPattern mp,
+			KotlinFileModel fileModel, KotlinCompilationUnit cu,
+			SearchRequestor requestor, String packageName)
+			throws CoreException {
+		if (mp.selector == null) {
+			return;
+		}
+		String selector = new String(mp.selector);
+		String propertyName = derivePropertyName(selector);
+		if (propertyName == null) {
+			return;
+		}
+		for (KotlinDeclaration decl : fileModel.getDeclarations()) {
+			if (decl instanceof KotlinDeclaration.PropertyDeclaration propDecl
+					&& propDecl.getEnclosingTypeName() == null
+					&& propertyName.equalsIgnoreCase(propDecl.getName())) {
+				reportFieldMatch(propDecl, null, cu, requestor,
+						packageName);
 			}
 		}
 	}
@@ -773,6 +897,18 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			return false;
 		}
 		return name.equalsIgnoreCase(new String(fieldName));
+	}
+
+	private boolean matchesPropertyAccessor(
+			KotlinDeclaration.PropertyDeclaration propDecl,
+			MethodPattern mp) {
+		if (mp.selector == null || propDecl.getName() == null) {
+			return false;
+		}
+		String propertyName = derivePropertyName(
+				new String(mp.selector));
+		return propertyName != null
+				&& propertyName.equalsIgnoreCase(propDecl.getName());
 	}
 
 	private void reportMethodMatch(
@@ -936,6 +1072,15 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				KotlinElement.KotlinTypeElement enclosingTypeElement =
 						enclosing.typeElement();
 				if (enclosingDecl == null) {
+					// Reference outside any declaration (e.g., import
+					// statement). Report with a file-facade element.
+					KotlinElement.KotlinTypeElement facadeType =
+							KotlinElement.buildFileFacadeType(
+									cu, packageName);
+					SearchMatch match = new SearchMatch(facadeType,
+							SearchMatch.A_ACCURATE, ref.getOffset(),
+							ref.getLength(), this, cu.getResource());
+					requestor.acceptSearchMatch(match);
 					continue;
 				}
 
@@ -1771,5 +1916,27 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			return null;
 		}
 		return fileName.substring(0, dot);
+	}
+
+	/**
+	 * Derives the file-facade class name from a document path.
+	 * Returns e.g. {@code "FooKt"} for {@code "src/pkg/Foo.kt"}.
+	 */
+	private static boolean hasTopLevelDeclarations(
+			KotlinFileModel fileModel) {
+		for (KotlinDeclaration decl : fileModel.getDeclarations()) {
+			if ((decl instanceof KotlinDeclaration.MethodDeclaration md
+					&& md.getEnclosingTypeName() == null)
+				|| (decl instanceof KotlinDeclaration.PropertyDeclaration pd
+					&& pd.getEnclosingTypeName() == null)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static String deriveFacadeClassName(String path) {
+		String baseName = deriveClassName(path);
+		return baseName != null ? baseName + "Kt" : null;
 	}
 }

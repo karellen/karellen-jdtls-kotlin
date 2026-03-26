@@ -22,7 +22,7 @@ co.karellen.jdtls.kotlin/          # OSGi plugin bundle (eclipse-plugin packagin
 
 co.karellen.jdtls.kotlin.tests/    # Integration tests (eclipse-test-plugin)
   src/co/karellen/jdtls/kotlin/tests/
-    KotlinSearchParticipantIntegrationTest.java  # 15 JUnit 5 tests
+    KotlinSearchParticipantIntegrationTest.java  # JUnit 5 integration tests
     TestHelpers.java                             # Project/file creation utilities
 
 co.karellen.jdtls.kotlin.product/  # Product distribution (eclipse-repository)
@@ -117,6 +117,11 @@ smart cast narrowing, index emission, and IJavaElement resolution. All cross-lan
 LSP features working: find references, go-to-definition, hover, call hierarchy, type
 hierarchy, document symbols, and code lens. Bidirectional Java↔Kotlin property/getter
 interop: searching for Java `getName()` finds Kotlin `obj.name` access and vice
-versa. 275 integration tests, 87% instruction / 68% branch coverage. Product module
-produces a self-contained distribution (~48MB tar.gz) with native Eclipse launcher
-(`jdtls`), all jdtls bundles, and the Kotlin plugin.
+versa. `codeSelect()` resolves type references, import targets, and expression
+receivers to Java `IType` elements. File-facade classes (`FileNameKt`) indexed as
+TYPE_DECL; JVM-generated property accessors (`get`/`set`/`is`) indexed as METHOD_DECL.
+Import statements indexed as REF entries. `OrPattern` (REFERENCES + DECLARATIONS
+combined) unwrapped and dispatched to sub-patterns for correct `includeDeclaration`
+handling. 299 integration tests, 87% instruction / 68% branch coverage. Product
+module produces a self-contained distribution (~48MB tar.gz) with native Eclipse
+launcher (`jdtls`), all jdtls bundles, and the Kotlin plugin.

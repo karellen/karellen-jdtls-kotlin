@@ -35,6 +35,7 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.jdt.internal.core.search.indexing.IndexManager;
 import org.eclipse.jdt.core.IClasspathEntry;
 import org.eclipse.jdt.core.ICompilationUnit;
+import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.IPackageFragment;
 import org.eclipse.jdt.core.IPackageFragmentRoot;
@@ -426,8 +427,15 @@ public final class TestHelpers {
 	 * Executes a search using all search participants (default + contributed).
 	 */
 	public static List<SearchMatch> executeSearch(SearchPattern pattern, IJavaProject project) throws CoreException {
-		IJavaSearchScope scope = SearchEngine.createJavaSearchScope(
-				new IJavaProject[] { project });
+		return executeSearch(pattern, new IJavaProject[] { project });
+	}
+
+	/**
+	 * Executes a search using all search participants across multiple projects.
+	 * Mimics jdtls ReferencesHandler which creates a scope from ALL workspace projects.
+	 */
+	public static List<SearchMatch> executeSearch(SearchPattern pattern, IJavaProject... projects) throws CoreException {
+		IJavaSearchScope scope = SearchEngine.createJavaSearchScope(projects);
 
 		List<SearchMatch> matches = new ArrayList<>();
 		SearchRequestor requestor = new SearchRequestor() {
@@ -444,6 +452,41 @@ public final class TestHelpers {
 				requestor,
 				null);
 
+		return matches;
+	}
+
+	/**
+	 * Simulates HoverInfoProvider.isResolved() logic: if the element is a
+	 * TYPE, searches for it within a scope created from the given CU.
+	 * Returns matches found; empty list means hover would fail.
+	 */
+	public static List<SearchMatch> simulateIsResolvedSearch(
+			IJavaElement resolved, ICompilationUnit cu) throws CoreException {
+		List<SearchMatch> matches = new ArrayList<>();
+		if (resolved.getElementType() != IJavaElement.TYPE) {
+			return matches;
+		}
+		SearchPattern pattern = SearchPattern.createPattern(
+				resolved, IJavaSearchConstants.ALL_OCCURRENCES);
+		if (pattern == null) {
+			return matches;
+		}
+		IJavaSearchScope scope = SearchEngine.createJavaSearchScope(
+				new IJavaElement[] { cu },
+				IJavaSearchScope.SOURCES
+				| IJavaSearchScope.APPLICATION_LIBRARIES
+				| IJavaSearchScope.SYSTEM_LIBRARIES);
+		new SearchEngine().search(pattern,
+				SearchEngine.getSearchParticipants(), scope,
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch m) {
+						if (m.getAccuracy()
+								!= SearchMatch.A_INACCURATE) {
+							matches.add(m);
+						}
+					}
+				}, null);
 		return matches;
 	}
 

@@ -703,9 +703,218 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@Override
 	public IJavaElement[] codeSelect(int offset, int length)
 			throws JavaModelException {
+		// Try reference resolution first: resolve what the cursor
+		// is pointing AT (the target of a reference).
+		IJavaElement resolved = resolveReferenceAt(offset);
+		if (resolved != null) {
+			return new IJavaElement[] { resolved };
+		}
+		// Fall back to finding the declaration that contains the cursor
 		IJavaElement element = findElementAt(offset);
 		return element != null ? new IJavaElement[] { element }
 				: new IJavaElement[0];
+	}
+
+	/**
+	 * Resolves the reference at the given offset to its target element.
+	 * Handles type references, import statements, and expression primaries
+	 * that refer to types.
+	 */
+	private IJavaElement resolveReferenceAt(int offset) {
+		KotlinModelManager modelManager = KotlinModelManager.getInstance();
+		String path = file != null ? file.getFullPath().toPortableString()
+				: null;
+		if (path == null) {
+			return null;
+		}
+		try {
+			IBuffer buf = getBuffer();
+			if (buf == null) {
+				return null;
+			}
+			String contents = buf.getContents();
+			if (contents == null || contents.isEmpty()) {
+				return null;
+			}
+			KotlinFileModel fileModel = modelManager.getFileModel(
+					path, contents.toCharArray());
+			if (fileModel == null) {
+				return null;
+			}
+
+			// Find the terminal node at the offset (single traversal)
+			org.antlr.v4.runtime.tree.ParseTree node =
+					findTerminalAt(fileModel.getParseTree(), offset);
+			if (node == null) {
+				return null;
+			}
+			String tokenText = node.getText();
+			if (tokenText == null || tokenText.isEmpty()) {
+				return null;
+			}
+
+			return resolveFromContext(node, tokenText, fileModel);
+		} catch (JavaModelException e) {
+			return null;
+		}
+	}
+
+	private IJavaElement resolveFromContext(
+			org.antlr.v4.runtime.tree.ParseTree node,
+			String tokenText, KotlinFileModel fileModel) {
+
+		if (isInImportContext(node)) {
+			return resolveImportTarget(node, fileModel);
+		}
+		if (isInTypeContext(node)) {
+			return resolveTypeReference(tokenText, fileModel);
+		}
+		if (Character.isUpperCase(tokenText.charAt(0))
+				&& isExpressionPrimary(node)) {
+			return resolveTypeReference(tokenText, fileModel);
+		}
+		return null;
+	}
+
+	private org.antlr.v4.runtime.tree.ParseTree findTerminalAt(
+			org.antlr.v4.runtime.tree.ParseTree tree, int offset) {
+		if (tree instanceof org.antlr.v4.runtime.tree.TerminalNode tn) {
+			org.antlr.v4.runtime.Token t = tn.getSymbol();
+			if (t != null && offset >= t.getStartIndex()
+					&& offset <= t.getStopIndex()) {
+				return tn;
+			}
+			return null;
+		}
+		if (tree instanceof org.antlr.v4.runtime.ParserRuleContext ctx) {
+			for (int i = 0; i < ctx.getChildCount(); i++) {
+				org.antlr.v4.runtime.tree.ParseTree found =
+						findTerminalAt(ctx.getChild(i), offset);
+				if (found != null) {
+					return found;
+				}
+			}
+		}
+		return null;
+	}
+
+	private boolean isInImportContext(
+			org.antlr.v4.runtime.tree.ParseTree node) {
+		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+		while (parent != null) {
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.ImportHeaderContext) {
+				return true;
+			}
+			parent = parent.getParent();
+		}
+		return false;
+	}
+
+	private boolean isInTypeContext(
+			org.antlr.v4.runtime.tree.ParseTree node) {
+		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+		while (parent != null) {
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.SimpleUserTypeContext) {
+				return true;
+			}
+			// Don't walk past expression boundaries
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.PostfixUnaryExpressionContext) {
+				return false;
+			}
+			parent = parent.getParent();
+		}
+		return false;
+	}
+
+	private boolean isExpressionPrimary(
+			org.antlr.v4.runtime.tree.ParseTree node) {
+		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+		while (parent != null) {
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.PrimaryExpressionContext) {
+				// Check if the grandparent is a postfix expression
+				// with navigation suffixes
+				org.antlr.v4.runtime.tree.ParseTree grandParent =
+						parent.getParent();
+				if (grandParent instanceof co.karellen.jdtls.kotlin
+						.parser.KotlinParser
+						.PostfixUnaryExpressionContext pue) {
+					return pue.postfixUnarySuffix() != null
+							&& !pue.postfixUnarySuffix().isEmpty();
+				}
+				return false;
+			}
+			parent = parent.getParent();
+		}
+		return false;
+	}
+
+	private IJavaElement resolveImportTarget(
+			org.antlr.v4.runtime.tree.ParseTree node,
+			KotlinFileModel fileModel) {
+		// Walk up to ImportHeaderContext
+		org.antlr.v4.runtime.tree.ParseTree current = node;
+		while (current != null
+				&& !(current instanceof co.karellen.jdtls.kotlin
+						.parser.KotlinParser.ImportHeaderContext)) {
+			current = current.getParent();
+		}
+		if (current == null) {
+			return null;
+		}
+		co.karellen.jdtls.kotlin.parser.KotlinParser.ImportHeaderContext
+				importCtx = (co.karellen.jdtls.kotlin.parser
+						.KotlinParser.ImportHeaderContext) current;
+		co.karellen.jdtls.kotlin.parser.KotlinParser.IdentifierContext
+				identifier = importCtx.identifier();
+		if (identifier == null) {
+			return null;
+		}
+		// Build FQN from the identifier parts
+		java.util.List<co.karellen.jdtls.kotlin.parser.KotlinParser
+				.SimpleIdentifierContext> parts =
+				identifier.simpleIdentifier();
+		if (parts == null || parts.isEmpty()) {
+			return null;
+		}
+		StringBuilder fqn = new StringBuilder();
+		for (int i = 0; i < parts.size(); i++) {
+			if (i > 0) fqn.append('.');
+			fqn.append(parts.get(i).getText());
+		}
+		return findJavaType(fqn.toString());
+	}
+
+	private IJavaElement resolveTypeReference(String simpleName,
+			KotlinFileModel fileModel) {
+		// ImportResolver.resolve() handles explicit imports, star
+		// imports, same-package, and default Kotlin imports
+		ImportResolver importResolver = new ImportResolver(
+				fileModel.getPackageName(), fileModel.getImports());
+		String fqn = importResolver.resolve(simpleName);
+		if (fqn != null) {
+			return findJavaType(fqn);
+		}
+		return null;
+	}
+
+	private IJavaElement findJavaType(String fqn) {
+		IJavaProject project = getJavaProject();
+		if (project == null) {
+			return null;
+		}
+		try {
+			IType type = project.findType(fqn);
+			if (type != null && type.exists()) {
+				return type;
+			}
+		} catch (JavaModelException e) {
+			// Type not found, return null
+		}
+		return null;
 	}
 
 	@CoverageExcludeGenerated

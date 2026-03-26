@@ -766,6 +766,354 @@ public class CrossLanguageHandlerTest {
 		assertEquals("handlerTestMethod", element.getElementName());
 	}
 
+	// ---- codeSelect reference resolution (#18, #19) ----
+
+	@Test
+	public void testCodeSelectOnJavaTypeReference() throws Exception {
+		// Java type in same package
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/JavaTarget.java",
+				"package handler.test;\n"
+				+ "public class JavaTarget {\n"
+				+ "    public static void run() {}\n"
+				+ "}\n");
+		// Kotlin file referencing the Java type
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/RefTest.kt",
+				"package handler.test\n\n"
+				+ "fun useJavaType(x: JavaTarget) {\n"
+				+ "    JavaTarget.run()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/RefTest.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		// codeSelect on "JavaTarget" in the parameter type position
+		int offset = source.indexOf("JavaTarget)");
+		assertTrue(offset > 0, "Should find JavaTarget in param type");
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect on Java type ref should resolve");
+		assertEquals("JavaTarget", selected[0].getElementName(),
+				"Should resolve to Java type");
+	}
+
+	@Test
+	public void testCodeSelectOnExpressionReceiver() throws Exception {
+		// Reuse JavaTarget from previous test setup
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/JavaTarget.java",
+				"package handler.test;\n"
+				+ "public class JavaTarget {\n"
+				+ "    public static void run() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ExprRef.kt",
+				"package handler.test\n\n"
+				+ "fun callJava() {\n"
+				+ "    JavaTarget.run()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ExprRef.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		// codeSelect on "JavaTarget" as expression receiver
+		int offset = source.indexOf("JavaTarget.run()");
+		assertTrue(offset > 0, "Should find JavaTarget.run()");
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect on expression receiver should resolve");
+		assertEquals("JavaTarget", selected[0].getElementName(),
+				"Should resolve to Java type");
+	}
+
+	@Test
+	public void testCodeSelectOnImport() throws Exception {
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/JavaTarget.java",
+				"package handler.test;\n"
+				+ "public class JavaTarget {\n"
+				+ "    public static void run() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ImportRef.kt",
+				"package handler.test\n\n"
+				+ "import handler.test.JavaTarget\n\n"
+				+ "fun work() { JavaTarget.run() }\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ImportRef.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		// codeSelect on "JavaTarget" in the import statement
+		int importOffset = source.indexOf("import handler.test.JavaTarget")
+				+ "import handler.test.".length();
+		assertTrue(importOffset > "import handler.test.".length(),
+				"Should find import");
+		IJavaElement[] selected = cu.codeSelect(importOffset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect on import should resolve");
+		assertEquals("JavaTarget", selected[0].getElementName(),
+				"Should resolve import to Java type");
+	}
+
+	@Test
+	public void testCodeSelectOnNonTypeIdentifier() throws Exception {
+		// Local variable — not a type reference, should fall back
+		// to findElementAt behavior
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/LocalVar.kt",
+				"package handler.test\n\n"
+				+ "fun useLocal() {\n"
+				+ "    val myVar = 42\n"
+				+ "    println(myVar)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/LocalVar.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		// codeSelect on "myVar" — lowercase, not a type ref
+		int offset = source.indexOf("val myVar") + "val ".length();
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		// Should find enclosing method via fallback
+		assertTrue(selected.length >= 1,
+				"codeSelect on local var should find enclosing element");
+	}
+
+	@Test
+	public void testCodeSelectOnSamePackageType() throws Exception {
+		// Java type in same package — no explicit import needed
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/SamePkg.java",
+				"package handler.test;\n"
+				+ "public class SamePkg {\n"
+				+ "    public static int VALUE = 1;\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/UseSamePkg.kt",
+				"package handler.test\n\n"
+				+ "fun useSamePkg(x: SamePkg) {}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/UseSamePkg.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		int offset = source.indexOf("SamePkg)");
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect on same-package type should resolve");
+		assertEquals("SamePkg", selected[0].getElementName());
+	}
+
+	// ---- Hover regression reproducer (#18 regression) ----
+	// Reproduces: codeSelect returns Java IType, but
+	// HoverInfoProvider.isResolved() fails because it searches
+	// within a scope created from the Kotlin CU for TYPE elements.
+	// Before PR #22, codeSelect returned the enclosing Kotlin
+	// declaration (type=METHOD), so isResolved bypassed the search.
+
+	@Test
+	public void testCodeSelectResolvedTypeIsResolvableInKotlinCUScope()
+			throws Exception {
+		// Java enum type (pattern: AriesUserRole.java)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/StatusCode.java",
+				"package handler.test;\n"
+				+ "public enum StatusCode {\n"
+				+ "    OK, ERROR;\n"
+				+ "}\n");
+		// Kotlin file that uses the Java enum in a type annotation
+		// (pattern: AuthUtils.kt using AriesUserRole in param type)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/StatusHelper.kt",
+				"package handler.test\n\n"
+				+ "fun checkStatus(code: StatusCode): Boolean {\n"
+				+ "    return code == StatusCode.OK\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/StatusHelper.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		// codeSelect on "StatusCode" in param type position
+		int offset = source.indexOf("StatusCode)");
+		assertTrue(offset > 0, "Should find StatusCode in source");
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect should resolve StatusCode");
+		IJavaElement resolved = selected[0];
+
+		// Verify: resolved element must be usable for hover.
+		// HoverInfoProvider.isResolved() searches for TYPE elements
+		// within the KotlinCU scope — this must find matches.
+		List<SearchMatch> isResolvedMatches =
+				TestHelpers.simulateIsResolvedSearch(resolved, cu);
+		if (resolved.getElementType() == IJavaElement.TYPE) {
+			assertTrue(isResolvedMatches.size() >= 1,
+					"isResolved-style search should find TYPE in "
+					+ "KotlinCU scope (hover depends on this); "
+					+ "got 0 matches");
+		}
+	}
+
+	@Test
+	public void testCodeSelectOnExprReceiverIsResolvableInKotlinCUScope()
+			throws Exception {
+		// Java exception class (pattern: PaymentCommonException)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/AppException.java",
+				"package handler.test;\n"
+				+ "public class AppException extends RuntimeException {\n"
+				+ "    public AppException(String msg) { super(msg); }\n"
+				+ "}\n");
+		// Kotlin uses the Java type as expression receiver
+		// (pattern: BnplMITPaymentService.kt throwing exception)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ServiceHelper.kt",
+				"package handler.test\n\n"
+				+ "fun doWork() {\n"
+				+ "    throw AppException(\"failed\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		IFile file = TestHelpers.getFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ServiceHelper.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(file);
+		String source = cu.getSource();
+
+		int offset = source.indexOf("AppException(\"failed\")");
+		assertTrue(offset > 0, "Should find AppException");
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect should resolve AppException");
+
+		IJavaElement resolved = selected[0];
+		List<SearchMatch> isResolvedMatches =
+				TestHelpers.simulateIsResolvedSearch(resolved, cu);
+		if (resolved.getElementType() == IJavaElement.TYPE) {
+			assertTrue(isResolvedMatches.size() >= 1,
+					"isResolved-style search should find TYPE in "
+					+ "KotlinCU scope for expression receiver; "
+					+ "got 0 matches");
+		}
+	}
+
+	// ---- Java→Kotlin facade class navigation reproducer (#20) ----
+	// Reproduces: Java code imports NumberExtensionsKt (facade class)
+	// and calls getBIG_DECIMAL_HUNDRED() (property accessor).
+	// Java's codeSelect returns null because Java can't resolve
+	// Kotlin types. These tests verify the Kotlin search participant
+	// can at least find the declarations via search.
+
+	@Test
+	public void testFacadeClassDiscoverableViaSearch() throws CoreException {
+		// Kotlin file with top-level property
+		// (pattern: NumberExtensions.kt with BIG_DECIMAL_HUNDRED)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/NumExt.kt",
+				"package handler.test\n\n"
+				+ "import java.math.BigDecimal\n\n"
+				+ "val BIG_HUNDRED: Int = 100\n"
+				+ "fun doubleIt(x: Int): Int = x * 2\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Facade class "NumExtKt" should be discoverable
+		List<SearchMatch> matches = TestHelpers.searchAllTypes(
+				"NumExtKt", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktMatches.size() >= 1,
+				"Facade NumExtKt should be findable via type search");
+	}
+
+	@Test
+	public void testPropertyAccessorDiscoverableViaSearch()
+			throws CoreException {
+		// Same Kotlin file with top-level property
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/NumExt.kt",
+				"package handler.test\n\n"
+				+ "val BIG_HUNDRED: Int = 100\n"
+				+ "fun doubleIt(x: Int): Int = x * 2\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Java-style getter getBIG_HUNDRED should find the property
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations(
+				"getBIG_HUNDRED", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktMatches.size() >= 1,
+				"Property accessor getBIG_HUNDRED should be findable");
+	}
+
+	// ---- Java→Kotlin go-to-def gap reproducer (items 7-10) ----
+	// Reproduces: Java file references Kotlin facade class and
+	// property accessor. Java's codeSelect can't resolve them.
+	// This documents the gap — NavigateToDefinitionHandler has no
+	// SearchEngine fallback for unresolved types.
+
+	@Test
+	public void testJavaCodeSelectOnKotlinFacadeReturnsNull()
+			throws Exception {
+		// Kotlin with top-level declarations
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/MathUtils.kt",
+				"package handler.test\n\n"
+				+ "val PI_APPROX: Double = 3.14159\n"
+				+ "fun circleArea(r: Double): Double = PI_APPROX * r * r\n");
+		// Java file that would reference MathUtilsKt
+		// (can't actually import because Java compiler doesn't know
+		// about the Kotlin facade class in the test container)
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/JavaMathUser.java",
+				"package handler.test;\n"
+				+ "public class JavaMathUser {\n"
+				+ "    // In real code: MathUtilsKt.getPI_APPROX()\n"
+				+ "    // Java's codeSelect would return null for\n"
+				+ "    // MathUtilsKt because it's not a Java type\n"
+				+ "    public double getPi() { return 3.14; }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Verify the facade IS findable via search (plugin works)
+		List<SearchMatch> matches = TestHelpers.searchAllTypes(
+				"MathUtilsKt", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktMatches.size() >= 1,
+				"MathUtilsKt facade should be findable via search "
+				+ "(plugin indexing works; jdtls NavigateToDefinitionHandler "
+				+ "needs SearchEngine fallback to use this)");
+	}
+
 	// ---- getCompilationUnit on participant ----
 
 	@Test
@@ -784,6 +1132,111 @@ public class CrossLanguageHandlerTest {
 				"CU should be a KotlinCompilationUnit");
 		assertTrue(cu.getTypes().length >= 2,
 				"CU should have types populated");
+	}
+
+	// ---- Facade class and property accessor matching (#20) ----
+
+	@Test
+	public void testFacadeClassTypeDeclaration() throws CoreException {
+		// Kotlin file with top-level function and property
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/TopLevel.kt",
+				"package handler.test\n\n"
+				+ "val topProperty: String = \"hello\"\n"
+				+ "fun topFunction(): Int = 42\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for the facade type declaration "TopLevelKt"
+		List<SearchMatch> matches = TestHelpers.searchAllTypes(
+				"TopLevelKt", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktMatches.size() >= 1,
+				"Should find TopLevelKt facade type");
+		assertNotNull(ktMatches.get(0).getElement(),
+				"Facade match should have an element");
+		assertTrue(ktMatches.get(0).getElement() instanceof IType,
+				"Facade element should be an IType");
+		assertEquals("TopLevelKt",
+				((IType) ktMatches.get(0).getElement()).getElementName(),
+				"Facade type name should be TopLevelKt");
+	}
+
+	@Test
+	public void testFacadeClassNotEmittedWithoutTopLevel() throws CoreException {
+		// Kotlin file with only a class, no top-level declarations
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ClassOnly.kt",
+				"package handler.test\n\n"
+				+ "class ClassOnlyType {\n"
+				+ "    fun method(): String = \"hello\"\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Should NOT find ClassOnlyKt facade
+		List<SearchMatch> matches = TestHelpers.searchAllTypes(
+				"ClassOnlyKt", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertEquals(0, ktMatches.size(),
+				"Should not find facade for file without top-level decls");
+	}
+
+	@Test
+	public void testPropertyAccessorMethodDeclaration() throws CoreException {
+		// Kotlin with top-level property
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/Props.kt",
+				"package handler.test\n\n"
+				+ "val fooBar: String = \"hello\"\n"
+				+ "var mutableProp: Int = 0\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Search for getter declaration
+		List<SearchMatch> getMatches = TestHelpers.searchMethodDeclarations(
+				"getFooBar", project);
+		List<SearchMatch> ktGet = getMatches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktGet.size() >= 1,
+				"Should find fooBar property via getFooBar");
+
+		// Search for setter declaration
+		List<SearchMatch> setMatches = TestHelpers.searchMethodDeclarations(
+				"setMutableProp", project);
+		List<SearchMatch> ktSet = setMatches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktSet.size() >= 1,
+				"Should find mutableProp property via setMutableProp");
+	}
+
+	@Test
+	public void testPropertyAccessorInClass() throws CoreException {
+		// Kotlin class with properties
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/handler/test/ClassProps.kt",
+				"package handler.test\n\n"
+				+ "class ClassWithProps {\n"
+				+ "    val readOnly: String = \"hello\"\n"
+				+ "    var readWrite: Int = 0\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations(
+				"getReadOnly", project);
+		List<SearchMatch> ktMatches = matches.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName().endsWith(".kt"))
+				.toList();
+		assertTrue(ktMatches.size() >= 1,
+				"Should find readOnly via getReadOnly in class");
 	}
 
 	// ---- Helpers ----

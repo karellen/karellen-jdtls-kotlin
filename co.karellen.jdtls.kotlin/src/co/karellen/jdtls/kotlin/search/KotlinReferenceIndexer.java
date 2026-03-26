@@ -116,6 +116,29 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 		return visitChildren(ctx);
 	}
 
+	// ---- Import statements ----
+
+	@Override
+	public Void visitImportHeader(
+			KotlinParser.ImportHeaderContext ctx) {
+		KotlinParser.IdentifierContext identifier = ctx.identifier();
+		if (identifier != null) {
+			List<KotlinParser.SimpleIdentifierContext> parts =
+					identifier.simpleIdentifier();
+			if (parts != null && !parts.isEmpty()) {
+				// Index the last segment (imported simple name) as REF
+				KotlinParser.SimpleIdentifierContext last =
+						parts.get(parts.size() - 1);
+				if (last != null) {
+					addTypeRef(last.getText());
+				}
+			}
+		}
+		// Don't visit children — import identifiers are not
+		// expressions and shouldn't trigger other visitors
+		return null;
+	}
+
 	// ---- Constructor invocations in delegation specifiers ----
 
 	@Override
@@ -160,6 +183,28 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 				.postfixUnarySuffix();
 		if (suffixes == null || suffixes.isEmpty()) {
 			return visitChildren(ctx);
+		}
+
+		// Index the primary expression as a type ref when it looks
+		// like a type receiver (uppercase initial + navigation suffix).
+		// Handles: MyEnum.VALUE, Type.staticMethod(), Type::ref
+		KotlinParser.PostfixUnarySuffixContext firstSuffix =
+				suffixes.get(0);
+		if (firstSuffix.navigationSuffix() != null) {
+			KotlinParser.PrimaryExpressionContext primary = ctx
+					.primaryExpression();
+			if (primary != null
+					&& primary.simpleIdentifier() != null) {
+				String name = primary.simpleIdentifier().getText();
+				if (!name.isEmpty()
+						&& Character.isUpperCase(name.charAt(0))) {
+					String original = resolveAlias(name);
+					addTypeRef(name);
+					if (original != null) {
+						addTypeRef(original);
+					}
+				}
+			}
 		}
 
 		for (int i = 0; i < suffixes.size(); i++) {

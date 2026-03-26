@@ -216,6 +216,31 @@ public class KotlinReferenceFinder extends KotlinParserBaseVisitor<Void> {
 		return visitChildren(ctx);
 	}
 
+	// ---- Import statements ----
+
+	@Override
+	public Void visitImportHeader(
+			KotlinParser.ImportHeaderContext ctx) {
+		if (matchTypes) {
+			KotlinParser.IdentifierContext identifier = ctx.identifier();
+			if (identifier != null) {
+				List<KotlinParser.SimpleIdentifierContext> parts =
+						identifier.simpleIdentifier();
+				if (parts != null && !parts.isEmpty()) {
+					KotlinParser.SimpleIdentifierContext last =
+							parts.get(parts.size() - 1);
+					if (last != null && nameMatches(last.getText())) {
+						matches.add(new ReferenceMatch(
+								last.getStart().getStartIndex(),
+								last.getText().length(),
+								ReferenceMatch.Kind.TYPE_REF));
+					}
+				}
+			}
+		}
+		return null;
+	}
+
 	// ---- Constructor invocations in delegation specifiers ----
 
 	@Override
@@ -256,6 +281,25 @@ public class KotlinReferenceFinder extends KotlinParserBaseVisitor<Void> {
 				.postfixUnarySuffix();
 		if (suffixes == null || suffixes.isEmpty()) {
 			return visitChildren(ctx);
+		}
+
+		// Match primary expression as type receiver: Type.member,
+		// Type.method(), Type::ref
+		if (matchTypes && !suffixes.isEmpty()
+				&& suffixes.get(0).navigationSuffix() != null) {
+			KotlinParser.PrimaryExpressionContext primary = ctx
+					.primaryExpression();
+			if (primary != null
+					&& primary.simpleIdentifier() != null) {
+				KotlinParser.SimpleIdentifierContext simpleId =
+						primary.simpleIdentifier();
+				if (nameMatches(simpleId.getText())) {
+					matches.add(new ReferenceMatch(
+							simpleId.getStart().getStartIndex(),
+							simpleId.getText().length(),
+							ReferenceMatch.Kind.TYPE_REF));
+				}
+			}
 		}
 
 		for (int i = 0; i < suffixes.size(); i++) {
