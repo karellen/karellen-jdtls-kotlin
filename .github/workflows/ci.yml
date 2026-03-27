@@ -37,8 +37,10 @@ jobs:
       - name: Detect release request
         id: detect-release
         if: github.ref == 'refs/heads/master' && !contains(github.event.head_commit.message, '[skip ci]')
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          FIRST_LINE=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -1)
           if [[ "$FIRST_LINE" =~ \[release\ +([0-9]+\.[0-9]+\.[0-9]+)\] ]]; then
             echo "release_version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           elif [[ "$FIRST_LINE" =~ \[release\] ]]; then
