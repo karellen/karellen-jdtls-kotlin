@@ -16,9 +16,12 @@
 package co.karellen.jdtls.kotlin.search;
 
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.jobs.ISchedulingRule;
@@ -42,6 +45,7 @@ import org.eclipse.jdt.core.IPackageFragment;
 import org.eclipse.jdt.core.ISourceRange;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.ITypeHierarchy;
+import org.eclipse.jdt.core.ITypeHierarchyChangedListener;
 import org.eclipse.jdt.core.ITypeParameter;
 import org.eclipse.jdt.core.ITypeRoot;
 import org.eclipse.jdt.core.JavaModelException;
@@ -118,11 +122,13 @@ public abstract class KotlinElement implements IMember {
 		if (ancestorType == elementType) {
 			return this;
 		}
-		if (ancestorType == IJavaElement.COMPILATION_UNIT) {
-			return compilationUnit;
-		}
-		if (compilationUnit != null) {
-			return compilationUnit.getAncestor(ancestorType);
+		// Walk the parent chain (declaring type → compilation unit → ...)
+		IJavaElement parent = getParent();
+		while (parent != null) {
+			if (parent.getElementType() == ancestorType) {
+				return parent;
+			}
+			parent = parent.getParent();
 		}
 		return null;
 	}
@@ -327,7 +333,7 @@ public abstract class KotlinElement implements IMember {
 			String rename, boolean replace, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Kotlin elements are read-only")));
 	}
 
@@ -336,7 +342,7 @@ public abstract class KotlinElement implements IMember {
 	public void delete(boolean force, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Kotlin elements are read-only")));
 	}
 
@@ -346,7 +352,7 @@ public abstract class KotlinElement implements IMember {
 			String rename, boolean replace, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Kotlin elements are read-only")));
 	}
 
@@ -355,7 +361,7 @@ public abstract class KotlinElement implements IMember {
 	public void rename(String name, boolean replace,
 			IProgressMonitor monitor) throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Kotlin elements are read-only")));
 	}
 
@@ -682,7 +688,7 @@ public abstract class KotlinElement implements IMember {
 			if (children == null) {
 				return new IField[0];
 			}
-			java.util.List<IField> result = new java.util.ArrayList<>();
+			List<IField> result = new ArrayList<>();
 			for (IJavaElement child : children) {
 				if (child instanceof IField f) {
 					result.add(f);
@@ -696,7 +702,7 @@ public abstract class KotlinElement implements IMember {
 			if (children == null) {
 				return new IMethod[0];
 			}
-			java.util.List<IMethod> result = new java.util.ArrayList<>();
+			List<IMethod> result = new ArrayList<>();
 			for (IJavaElement child : children) {
 				if (child instanceof IMethod m) {
 					result.add(m);
@@ -710,7 +716,7 @@ public abstract class KotlinElement implements IMember {
 			if (children == null) {
 				return new IType[0];
 			}
-			java.util.List<IType> result = new java.util.ArrayList<>();
+			List<IType> result = new ArrayList<>();
 			for (IJavaElement child : children) {
 				if (child instanceof IType t) {
 					result.add(t);
@@ -875,93 +881,260 @@ public abstract class KotlinElement implements IMember {
 			return null;
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newSupertypeHierarchy(monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
 				org.eclipse.jdt.core.ICompilationUnit[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newSupertypeHierarchy(
+						workingCopies, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
+		@SuppressWarnings("deprecation")
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
 				org.eclipse.jdt.core.IWorkingCopy[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newSupertypeHierarchy(
+						workingCopies, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
 				WorkingCopyOwner owner, IProgressMonitor monitor)
 				throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newSupertypeHierarchy(owner, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newTypeHierarchy(IJavaProject project,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(project, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newTypeHierarchy(IJavaProject project,
 				WorkingCopyOwner owner, IProgressMonitor monitor)
 				throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(
+						project, owner, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newTypeHierarchy(
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newTypeHierarchy(
 				org.eclipse.jdt.core.ICompilationUnit[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(
+						workingCopies, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
+		@SuppressWarnings("deprecation")
 		@Override
 		public ITypeHierarchy newTypeHierarchy(
 				org.eclipse.jdt.core.IWorkingCopy[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(
+						workingCopies, monitor);
+			}
+			return emptyTypeHierarchy();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public ITypeHierarchy newTypeHierarchy(WorkingCopyOwner owner,
 				IProgressMonitor monitor) throws JavaModelException {
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.newTypeHierarchy(owner, monitor);
+			}
+			return emptyTypeHierarchy();
+		}
+
+		/**
+		 * Attempts to resolve this Kotlin type to a Java IType by
+		 * searching the project for the fully-qualified type name.
+		 * Returns null if not resolvable (e.g., pure Kotlin type
+		 * with no Java counterpart on the classpath).
+		 */
+		IType resolveToJavaType() {
+			IJavaElement jp = getAncestor(IJavaElement.JAVA_PROJECT);
+			if (jp instanceof IJavaProject javaProject) {
+				String fqn = getFullyQualifiedName();
+				if (fqn != null) {
+					try {
+						IType type = javaProject.findType(fqn);
+						if (type != null && type.exists()) {
+							return type;
+						}
+					} catch (JavaModelException e) {
+						// Not resolvable
+					}
+				}
+			}
 			return null;
 		}
 
-		@CoverageExcludeGenerated
+		private static final IType[] EMPTY_TYPES = new IType[0];
+		private ITypeHierarchy cachedEmptyHierarchy;
+
+		/**
+		 * Returns a minimal ITypeHierarchy with no supertypes or
+		 * subtypes. Used as a fallback when no Java counterpart
+		 * exists for the Kotlin type. Cached per instance.
+		 */
+		private ITypeHierarchy emptyTypeHierarchy() {
+			if (cachedEmptyHierarchy != null) {
+				return cachedEmptyHierarchy;
+			}
+			KotlinTypeElement self = this;
+			ITypeHierarchy hierarchy = new ITypeHierarchy() {
+				@Override
+				public IType getType() { return self; }
+				@Override
+				public IType[] getAllClasses() { return EMPTY_TYPES; }
+				@Override
+				public IType[] getAllInterfaces() { return EMPTY_TYPES; }
+				@Override
+				public IType[] getAllSubtypes(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getAllSuperclasses(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getAllSuperInterfaces(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getAllSupertypes(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getAllTypes() {
+					return new IType[] { self };
+				}
+				@Override
+				public int getCachedFlags(IType type) { return 0; }
+				@Override
+				public IType[] getExtendingInterfaces(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getImplementingClasses(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getSubclasses(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getSubtypes(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType getSuperclass(IType type) {
+					return null;
+				}
+				@Override
+				public IType[] getSuperInterfaces(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getSupertypes(IType type) {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getRootClasses() {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public IType[] getRootInterfaces() {
+					return EMPTY_TYPES;
+				}
+				@Override
+				public boolean contains(IType type) {
+					return self.equals(type);
+				}
+				@Override
+				public boolean exists() { return true; }
+				@Override
+				public void addTypeHierarchyChangedListener(
+						ITypeHierarchyChangedListener listener) {}
+				@Override
+				public void removeTypeHierarchyChangedListener(
+						ITypeHierarchyChangedListener listener) {}
+				@Override
+				public void refresh(IProgressMonitor monitor) {}
+				@Override
+				public void store(java.io.OutputStream outputStream,
+						IProgressMonitor monitor) {}
+			};
+			cachedEmptyHierarchy = hierarchy;
+			return hierarchy;
+		}
+
 		@Override
 		public String[][] resolveType(String typeName)
 				throws JavaModelException {
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.resolveType(typeName);
+			}
 			return null;
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public String[][] resolveType(String typeName,
 				WorkingCopyOwner owner) throws JavaModelException {
+			IType javaType = resolveToJavaType();
+			if (javaType != null) {
+				return javaType.resolveType(typeName, owner);
+			}
 			return null;
 		}
 
@@ -1373,17 +1546,226 @@ public abstract class KotlinElement implements IMember {
 	 * A stub element representing a callee for outgoing call hierarchy.
 	 * Returns {@code false} from {@link #exists()} so that the call
 	 * hierarchy engine resolves it via declaration search.
+	 * <p>
+	 * Carries as much context as possible from the call site to help
+	 * downstream resolution (e.g., argument count, argument types,
+	 * receiver type) narrow the search and avoid false positives.
 	 */
-	static class CalleeStub extends KotlinElement {
+	static class CalleeStub extends KotlinElement
+			implements IMethod {
+
+		private final List<String> argumentTypeNames;
+		private final String receiverTypeFQN;
+		private final List<String> declaringTypeCandidates;
+		private KotlinTypeElement declaringType;
 
 		CalleeStub(String name, int elementType) {
+			this(name, elementType, null, null, null);
+		}
+
+		CalleeStub(String name, int elementType,
+				List<String> argumentTypeNames,
+				String receiverTypeFQN,
+				List<String> declaringTypeCandidates) {
 			super(name, elementType, null, 0, 0, 0);
+			this.argumentTypeNames = argumentTypeNames != null
+					? List.copyOf(argumentTypeNames)
+					: List.of();
+			this.receiverTypeFQN = receiverTypeFQN;
+			this.declaringTypeCandidates =
+					declaringTypeCandidates != null
+					? List.copyOf(declaringTypeCandidates)
+					: List.of();
+			// Build declaring type from receiver or first candidate
+			if (receiverTypeFQN != null) {
+				int lastDot = receiverTypeFQN.lastIndexOf('.');
+				String pkg = lastDot > 0
+						? receiverTypeFQN.substring(0, lastDot) : "";
+				String simple = lastDot > 0
+						? receiverTypeFQN.substring(lastDot + 1)
+						: receiverTypeFQN;
+				this.declaringType = new KotlinTypeElement(
+						simple, null, pkg, null, 0, 0);
+			} else if (declaringTypeCandidates != null
+					&& !declaringTypeCandidates.isEmpty()) {
+				String fqn = declaringTypeCandidates.get(0);
+				int lastDot = fqn.lastIndexOf('.');
+				String pkg = lastDot > 0
+						? fqn.substring(0, lastDot) : "";
+				String simple = lastDot > 0
+						? fqn.substring(lastDot + 1) : fqn;
+				this.declaringType = new KotlinTypeElement(
+						simple, null, pkg, null, 0, 0);
+			}
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public boolean exists() {
 			return false;
+		}
+
+		@Override
+		public IType getDeclaringType() {
+			return declaringType;
+		}
+
+		// ---- IMethod: parameter info from call site ----
+
+		@Override
+		public int getNumberOfParameters() {
+			return argumentTypeNames.size();
+		}
+
+		@Override
+		public String[] getParameterTypes() {
+			return argumentTypeNames.toArray(new String[0]);
+		}
+
+		@Override
+		public String[] getParameterNames()
+				throws JavaModelException {
+			return new String[0];
+		}
+
+		// ---- IMethod: remaining methods not used by
+		//      CalleeMethodWrapper.resolveCallee() ----
+
+		@Override
+		public boolean isConstructor() {
+			return getElementType() == IJavaElement.TYPE;
+		}
+
+		@Override
+		public boolean isResolved() {
+			return false;
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String getReturnType() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String[] getExceptionTypes() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String[] getTypeParameterSignatures() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public ITypeParameter[] getTypeParameters() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public boolean isMainMethod() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public boolean isMainMethodCandidate() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public boolean isLambdaMethod() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public boolean isSimilar(IMethod method) {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String[] getRawParameterNames() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String getKey() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public ILocalVariable[] getParameters() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public IMemberValuePair getDefaultValue() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public String getSignature() {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public ITypeParameter getTypeParameter(String name) {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public IAnnotation getAnnotation(String name) {
+			throw new UnsupportedOperationException();
+		}
+
+		@CoverageExcludeGenerated
+		@Override
+		public IAnnotation[] getAnnotations() {
+			throw new UnsupportedOperationException();
+		}
+	}
+
+	/**
+	 * A resolved callee element for Kotlin types and functions found
+	 * in the symbol table but not resolvable via JDT's
+	 * {@code findType}. Returns {@code true} from {@code exists()}
+	 * to prevent expensive project-wide declaration searches.
+	 */
+	static class ResolvedCallee extends KotlinElement {
+
+		private KotlinTypeElement declaringType;
+
+		ResolvedCallee(String name, int elementType,
+				int sourceOffset, int sourceLength) {
+			super(name, elementType, null,
+					sourceOffset, sourceLength, 0);
+		}
+
+		void setDeclaringType(KotlinTypeElement type) {
+			this.declaringType = type;
+		}
+
+		@Override
+		public IType getDeclaringType() {
+			return declaringType;
+		}
+
+		@Override
+		public boolean exists() {
+			return true;
 		}
 	}
 
@@ -1404,10 +1786,10 @@ public abstract class KotlinElement implements IMember {
 				typeDecl.getSupertypes().toArray(new String[0]),
 				typeDecl.getModifiers());
 
-		java.util.List<KotlinDeclaration> members = typeDecl.getMembers();
+		List<KotlinDeclaration> members = typeDecl.getMembers();
 		if (members != null && !members.isEmpty()) {
-			java.util.List<IJavaElement> childElements =
-					new java.util.ArrayList<>();
+			List<IJavaElement> childElements =
+					new ArrayList<>();
 			String typeFqn = typeDecl.getName();
 			for (KotlinDeclaration member : members) {
 				if (member instanceof KotlinDeclaration.MethodDeclaration md) {
@@ -1445,7 +1827,7 @@ public abstract class KotlinElement implements IMember {
 			KotlinCompilationUnit cu) {
 		int sourceLength = methodDecl.getEndOffset()
 				- methodDecl.getStartOffset() + 1;
-		java.util.List<KotlinDeclaration.MethodDeclaration.Parameter> params =
+		List<KotlinDeclaration.MethodDeclaration.Parameter> params =
 				methodDecl.getParameters();
 		String[] paramTypes = new String[params.size()];
 		String[] paramNames = new String[params.size()];
@@ -1466,7 +1848,7 @@ public abstract class KotlinElement implements IMember {
 			KotlinCompilationUnit cu) {
 		int sourceLength = ctorDecl.getEndOffset()
 				- ctorDecl.getStartOffset() + 1;
-		java.util.List<KotlinDeclaration.MethodDeclaration.Parameter> params =
+		List<KotlinDeclaration.MethodDeclaration.Parameter> params =
 				ctorDecl.getParameters();
 		String[] paramTypes = new String[params.size()];
 		String[] paramNames = new String[params.size()];
@@ -1509,7 +1891,7 @@ public abstract class KotlinElement implements IMember {
 	@CoverageExcludeGenerated
 	private static JavaModelException readOnlyException() {
 		return new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Kotlin elements are read-only")));
 	}
 }

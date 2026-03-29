@@ -16,15 +16,23 @@
 package co.karellen.jdtls.kotlin.search;
 
 import java.io.IOException;
+import java.lang.ref.SoftReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import co.karellen.jdtls.kotlin.parser.KotlinParser;
+
+import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.TerminalNode;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IResource;
@@ -32,12 +40,17 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.jdt.core.IClassFile;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.IMember;
+import org.eclipse.jdt.core.IPackageFragment;
+import org.eclipse.jdt.core.IPackageFragmentRoot;
 import org.eclipse.jdt.core.ISourceRange;
+import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.ITypeHierarchy;
 import org.eclipse.jdt.core.JavaModelException;
@@ -81,6 +94,16 @@ public class KotlinSearchParticipant extends SearchParticipant {
 
 	private final KotlinModelManager modelManager =
 			KotlinModelManager.getInstance();
+
+	/**
+	 * Participant-level cache of supertype hierarchies keyed by type
+	 * FQN. Type hierarchies for JDK types never change; for user
+	 * types, stale entries are harmless because {@code findType()}
+	 * returns null for deleted types so the cached hierarchy is
+	 * never reached. Soft references allow GC under memory pressure.
+	 */
+	private final Map<String, SoftReference<ITypeHierarchy>>
+			supertypeHierarchyCache = new ConcurrentHashMap<>();
 
 	public KotlinSearchParticipant() {
 	}
@@ -193,7 +216,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		try {
 			indexExpressionReferences(document, fileModel);
 		} catch (Exception e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchParticipant.class).error(
 					"Kotlin expression indexing failed for " + path,
 					e);
@@ -459,7 +482,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 						"set", standardCapitalized, propertyName);
 			}
 		} catch (IOException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchParticipant.class).warn(
 					"Failed to query Java index for getter names",
 					e);
@@ -1047,7 +1070,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		KotlinDeclaration lastEnclosingDecl = null;
 		KotlinDeclaration.TypeDeclaration lastEnclosingType = null;
 		int scopesBefore = scopeChain.depth();
-		// Cache JDT type hierarchies per FQN to avoid repeated builds
+		// Per-file hierarchy cache that reads from/writes to the
+		// participant-level soft cache for cross-invocation reuse
 		Map<String, ITypeHierarchy> hierarchyCache =
 				new HashMap<>();
 		// Lambda scopes for the current enclosing function
@@ -1226,7 +1250,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 						lambdaScope.getCallExprCtx(),
 						lambdaScope.getCallNavSuffixIndex());
 			} catch (Exception e) {
-				org.eclipse.core.runtime.Platform.getLog(
+				Platform.getLog(
 						KotlinSearchParticipant.class).warn(
 						"Lambda receiver resolution failed for '"
 								+ lambdaScope.getFunctionName()
@@ -1330,7 +1354,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					resolvedType = KotlinType.UNKNOWN;
 				}
 			} catch (Exception e) {
-				org.eclipse.core.runtime.Platform.getLog(
+				Platform.getLog(
 						KotlinSearchParticipant.class).warn(
 						"Expression type resolution failed for receiver '"
 								+ receiverName + "'", e);
@@ -1489,7 +1513,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					return false;
 				}
 			} catch (Exception e) {
-				org.eclipse.core.runtime.Platform.getLog(
+				Platform.getLog(
 						KotlinSearchParticipant.class).warn(
 						"JDT field lookup failed for receiver '"
 								+ receiverName + "' field '"
@@ -1818,33 +1842,959 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					.findMember(IPath.fromPortableString(path));
 		}
 		if (resource == null) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchParticipant.class).warn(
 					"Could not resolve resource for callee matches: "
 							+ path);
 			return new SearchMatch[0];
 		}
 
+		// Build type resolution infrastructure to resolve callees
+		// to real IJavaElements instead of unresolved stubs
+		String packageName = fileModel.getPackageName();
+		ImportResolver importResolver = new ImportResolver(
+				packageName, fileModel.getImports());
+		SymbolTable symbolTable = modelManager.getSymbolTable();
+		ScopeChain scopeChain = new ScopeChain(
+				importResolver, symbolTable);
+		scopeChain.initFileScope(fileModel);
+		SubtypeChecker subtypeChecker = new SubtypeChecker(
+				symbolTable, caller.getJavaProject());
+		ExpressionTypeResolver exprResolver =
+				new ExpressionTypeResolver(scopeChain, symbolTable,
+						importResolver, subtypeChecker,
+						caller.getJavaProject());
+
+		// Push scopes for the caller's enclosing class and method
+		// so parameters and local variables are resolvable
+		KotlinCompilationUnit cu =
+				(KotlinCompilationUnit) caller.getCompilationUnit();
+		EnclosingContext enclosing = findEnclosingDeclarationAndType(
+				fileModel.getDeclarations(),
+				callerDecl.getStartOffset(), cu, packageName);
+		if (enclosing.typeDecl() != null) {
+			scopeChain.initClassScope(enclosing.typeDecl(),
+					packageName, exprResolver,
+					fileModel.getParseTree());
+		}
+		if (callerDecl instanceof
+				KotlinDeclaration.MethodDeclaration md) {
+			scopeChain.initFunctionScope(md);
+			List<LocalVariableExtractor.LocalVariable> locals =
+					LocalVariableExtractor.extract(
+							fileModel.getParseTree(),
+							md.getStartOffset(),
+							md.getEndOffset());
+			if (!locals.isEmpty()) {
+				scopeChain.initLocalVariableScope(locals,
+						exprResolver);
+			}
+		}
+
+		IJavaProject javaProject = caller.getJavaProject();
+
 		List<SearchMatch> matches = new ArrayList<>();
+		int resolved = 0;
+		List<String> stubs = new ArrayList<>();
 		for (KotlinCalleeFinder.CalleeMatch callee : callees) {
-			int elementType =
-					callee.getKind() == KotlinCalleeFinder.CalleeMatch.Kind.CONSTRUCTOR_CALL
-					? IJavaElement.TYPE : IJavaElement.METHOD;
-			KotlinElement.CalleeStub stub = new KotlinElement.CalleeStub(
-					callee.getName(), elementType);
-			matches.add(new SearchMatch(stub, SearchMatch.A_ACCURATE,
+			IJavaElement element = resolveCallee(callee,
+					importResolver, javaProject, fileModel,
+					scopeChain, exprResolver, enclosing);
+			if (element == null) {
+				// Fallback to stub — CalleeMethodWrapper will do
+				// a declaration search to resolve. Extract as much
+				// context as possible to help narrow the search.
+				int elementType =
+						callee.getKind() == KotlinCalleeFinder
+								.CalleeMatch.Kind.CONSTRUCTOR_CALL
+						? IJavaElement.TYPE : IJavaElement.METHOD;
+				element = buildCalleeStub(callee, elementType,
+						fileModel, importResolver, exprResolver);
+				stubs.add(callee.getName() + "@"
+						+ callee.getOffset());
+			} else {
+				resolved++;
+			}
+			matches.add(new SearchMatch(element,
+					SearchMatch.A_ACCURATE,
 					callee.getOffset(), callee.getLength(),
 					this, resource));
 		}
+		if (!stubs.isEmpty()) {
+			Platform.getLog(
+					KotlinSearchParticipant.class).info(
+					"locateCallees: " + caller.getElementName()
+					+ " — resolved " + resolved + "/"
+					+ callees.size() + ", stubs: " + stubs);
+		}
 
 		return matches.toArray(new SearchMatch[0]);
+	}
+
+	/**
+	 * Resolves a callee match to a real IJavaElement by finding the
+	 * declaring type and looking up the method/constructor on it.
+	 */
+	private IJavaElement resolveCallee(
+			KotlinCalleeFinder.CalleeMatch callee,
+			ImportResolver importResolver,
+			IJavaProject javaProject,
+			KotlinFileModel fileModel,
+			ScopeChain scopeChain,
+			ExpressionTypeResolver exprResolver,
+			EnclosingContext enclosing) {
+		String calleeName = callee.getName();
+		try {
+			if (callee.getKind()
+					== KotlinCalleeFinder.CalleeMatch
+							.Kind.CONSTRUCTOR_CALL) {
+				// Constructor: try KotlinType.resolve first for
+				// auto-imports (ArrayList → java.util.ArrayList)
+				if (javaProject != null) {
+					KotlinType resolvedType = KotlinType.resolve(
+							calleeName, importResolver);
+					if (!resolvedType.isUnknown()) {
+						String javaFqn = resolvedType.getJavaFQN();
+						IType type = javaProject.findType(javaFqn);
+						if (type != null && type.exists()) {
+							return type;
+						}
+					}
+				}
+				// Try all import candidates: JDT first, then
+				// symbol table, in a single pass
+				for (String candidate : importResolver
+						.resolveAllCandidates(calleeName)) {
+					if (javaProject != null) {
+						IType type = javaProject.findType(candidate);
+						if (type != null && type.exists()) {
+							return type;
+						}
+					}
+					KotlinElement.KotlinTypeElement resolved =
+							buildCalleeTypeElement(
+									calleeName, candidate, callee);
+					if (resolved != null) {
+						return resolved;
+					}
+				}
+				return null;
+			}
+
+			// Method call: find the ANTLR node at callee offset to
+			// determine receiver, then resolve receiver type
+			ParseTree node =
+					findTerminalAtOffset(fileModel.getParseTree(),
+							callee.getOffset());
+			if (node == null) {
+				return null;
+			}
+
+			// Walk up to find the PostfixUnaryExpression that
+			// contains this callee. Handles both navigation
+			// suffix (.method()) and indexing suffix ([key]).
+			ParseTree parent =
+					node.getParent();
+			while (parent != null
+					&& !(parent instanceof co.karellen.jdtls
+							.kotlin.parser.KotlinParser
+							.PostfixUnaryExpressionContext)
+					&& !(parent instanceof co.karellen.jdtls
+							.kotlin.parser.KotlinParser
+							.InfixFunctionCallContext)) {
+				parent = parent.getParent();
+			}
+
+			if (parent instanceof co.karellen.jdtls.kotlin
+					.parser.KotlinParser
+					.PostfixUnaryExpressionContext postfix) {
+				IJavaElement resolved = resolveReceiverMethod(
+						postfix, callee, importResolver,
+						javaProject, exprResolver);
+				if (resolved != null) {
+					return resolved;
+				}
+			}
+
+			if (parent instanceof co.karellen.jdtls.kotlin
+					.parser.KotlinParser
+					.InfixFunctionCallContext infix) {
+				IJavaElement resolved = resolveInfixCallee(
+						infix, calleeName, javaProject,
+						exprResolver);
+				if (resolved != null) {
+					return resolved;
+				}
+			}
+
+			// Direct call: function(args) — try as top-level
+			// function or import
+			String fqn = importResolver.resolve(calleeName);
+			if (fqn != null && javaProject != null) {
+				IType type = javaProject.findType(fqn);
+				if (type != null && type.exists()) {
+					return type;
+				}
+			}
+
+			// Top-level function in symbol table — return a
+			// ResolvedCallee with proper declaring type
+			SymbolTable symbolTable = modelManager.getSymbolTable();
+			if (isKnownTopLevelFunction(calleeName, symbolTable)) {
+				KotlinElement.ResolvedCallee resolved =
+						buildCalleeMethodElement(
+								calleeName, callee, fileModel);
+				if (resolved != null) {
+					return resolved;
+				}
+			}
+
+			// Facade class resolution: the import FQN points to the
+			// function (pkg.funcName), derive the facade class
+			// (pkg.FileNameKt) and try findType + findMethodOnType
+			if (fqn != null && javaProject != null) {
+				IJavaElement facadeResolved =
+						resolveFacadeFunction(calleeName, fqn,
+								symbolTable, javaProject);
+				if (facadeResolved != null) {
+					return facadeResolved;
+				}
+			}
+
+			// Implicit this: unqualified method call within a class
+			if (enclosing != null
+					&& enclosing.typeDecl() != null) {
+				IJavaElement resolved = resolveImplicitThisMethod(
+						enclosing, calleeName, importResolver,
+						javaProject);
+				if (resolved != null) {
+					return resolved;
+				}
+			}
+
+		} catch (JavaModelException e) {
+			Platform.getLog(
+					KotlinSearchParticipant.class).warn(
+					"Failed to resolve callee: " + calleeName, e);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves a method call on a receiver expression within a
+	 * PostfixUnaryExpression. Uses ExpressionTypeResolver to handle
+	 * chained calls (e.g., a.b().c()) by resolving the receiver type
+	 * up to the navigation suffix containing the callee.
+	 */
+	private IJavaElement resolveReceiverMethod(
+			KotlinParser.PostfixUnaryExpressionContext postfix,
+			KotlinCalleeFinder.CalleeMatch callee,
+			ImportResolver importResolver,
+			IJavaProject javaProject,
+			ExpressionTypeResolver exprResolver) {
+		try {
+			int navSuffixIndex = findNavSuffixIndex(
+					postfix, callee.getOffset());
+			KotlinType receiverType;
+			if (navSuffixIndex >= 0) {
+				receiverType = exprResolver.resolveReceiverUpTo(
+						postfix, navSuffixIndex);
+			} else {
+				// Indexing suffix or direct call on primary —
+				// resolve the full primary expression
+				receiverType = exprResolver.visit(
+						postfix.primaryExpression());
+				if (receiverType == null) {
+					receiverType = KotlinType.UNKNOWN;
+				}
+			}
+			if (receiverType.isUnknown()) {
+				return null;
+			}
+			IJavaElement result = resolveMethodOnKotlinType(
+					receiverType, callee.getName(),
+					importResolver, javaProject);
+			if (result != null) {
+				return result;
+			}
+			// Extension function fallback: method not found on
+			// the receiver type — try as Kotlin extension function
+			// compiled to a static method on a facade class
+			if (importResolver != null) {
+				result = resolveExtensionFunction(
+						callee.getName(), importResolver,
+						javaProject);
+				if (result != null) {
+					return result;
+				}
+			}
+		} catch (Exception e) {
+			Platform.getLog(
+					KotlinSearchParticipant.class).warn(
+					"Receiver method resolution failed for '"
+							+ callee.getName() + "'", e);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves an infix function call (e.g., "a to b") by resolving
+	 * the left operand's type and finding the method on it.
+	 */
+	private IJavaElement resolveInfixCallee(
+			KotlinParser.InfixFunctionCallContext infix,
+			String methodName,
+			IJavaProject javaProject,
+			ExpressionTypeResolver exprResolver) {
+		List<KotlinParser.RangeExpressionContext> operands =
+				infix.rangeExpression();
+		if (operands == null || operands.isEmpty()) {
+			return null;
+		}
+		try {
+			KotlinType leftType = exprResolver.visit(operands.get(0));
+			if (leftType == null || leftType.isUnknown()) {
+				return null;
+			}
+			return resolveMethodOnKotlinType(
+					leftType, methodName, null, javaProject);
+		} catch (Exception e) {
+			Platform.getLog(
+					KotlinSearchParticipant.class).warn(
+					"Infix callee resolution failed for '"
+							+ methodName + "'", e);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves an unqualified method call as a method on the enclosing
+	 * class (implicit this receiver). Tries the enclosing type first,
+	 * then falls back to searching supertypes.
+	 */
+	private IJavaElement resolveImplicitThisMethod(
+			EnclosingContext enclosing,
+			String methodName,
+			ImportResolver importResolver,
+			IJavaProject javaProject) throws JavaModelException {
+		KotlinDeclaration.TypeDeclaration typeDecl =
+				enclosing.typeDecl();
+		// Try the enclosing type itself
+		KotlinType enclosingType = KotlinType.resolve(
+				typeDecl.getName(), importResolver);
+		if (!enclosingType.isUnknown()) {
+			IJavaElement result = resolveMethodOnKotlinType(
+					enclosingType, methodName,
+					importResolver, javaProject);
+			if (result != null) {
+				return result;
+			}
+		}
+		// The enclosing type may be Kotlin (not in JDT), so try
+		// each declared supertype
+		for (String superName : typeDecl.getSupertypes()) {
+			// Strip type arguments (e.g., "ArrayList<String>" → "ArrayList")
+			int angle = superName.indexOf('<');
+			String baseName = angle >= 0
+					? superName.substring(0, angle) : superName;
+			KotlinType superType = KotlinType.resolve(
+					baseName, importResolver);
+			if (!superType.isUnknown()) {
+				IJavaElement result = resolveMethodOnKotlinType(
+						superType, methodName,
+						importResolver, javaProject);
+				if (result != null) {
+					return result;
+				}
+			}
+		}
+		// Extension function fallback: unqualified extension calls
+		// within a class body (e.g., list.first() without qualifier)
+		if (importResolver != null) {
+			IJavaElement extResult = resolveExtensionFunction(
+					methodName, importResolver, javaProject);
+			if (extResult != null) {
+				return extResult;
+			}
+		}
+		// Local member check: look directly in the parse tree for
+		// same-class methods (handles methods not yet in symbol table)
+		String packageName = importResolver != null
+				? importResolver.getPackageName() : null;
+		for (KotlinDeclaration member : typeDecl.getMembers()) {
+			if (member instanceof KotlinDeclaration.MethodDeclaration
+					&& methodName.equals(member.getName())) {
+				KotlinElement.ResolvedCallee element =
+						new KotlinElement.ResolvedCallee(methodName,
+								IJavaElement.METHOD, 0, 0);
+				KotlinElement.KotlinTypeElement declType =
+						new KotlinElement.KotlinTypeElement(
+								typeDecl.getName(), null,
+								packageName, null, 0, 0);
+				element.setDeclaringType(declType);
+				return element;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Converts a KotlinType to a JDT IType and finds the named method
+	 * on it, searching the supertype hierarchy if needed. Falls back
+	 * to the symbol table when {@code findType()} returns null (Kotlin
+	 * types without compiled .class files).
+	 */
+	private IJavaElement resolveMethodOnKotlinType(
+			KotlinType kotlinType, String methodName,
+			ImportResolver importResolver,
+			IJavaProject javaProject) throws JavaModelException {
+		String fqn = kotlinType.getJavaFQN();
+		if (fqn == null) {
+			return null;
+		}
+		// Try JDT first (works for compiled types)
+		if (javaProject != null) {
+			IType type = javaProject.findType(fqn);
+			if (type != null && type.exists()) {
+				IMethod method = findMethodOnType(type, methodName);
+				if (method != null) {
+					return method;
+				}
+			}
+		}
+		// Symbol table fallback for Kotlin source-only types
+		SymbolTable symbolTable = modelManager.getSymbolTable();
+		IJavaElement result = resolveMethodViaSymbolTable(
+				fqn, methodName, symbolTable, importResolver);
+		if (result != null) {
+			return result;
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves a method on a Kotlin type via the symbol table. Checks
+	 * the type itself and then its supertypes (recursively via the
+	 * symbol table, with JDT fallback for compiled supertypes).
+	 */
+	private IJavaElement resolveMethodViaSymbolTable(
+			String typeFqn, String methodName,
+			SymbolTable symbolTable,
+			ImportResolver importResolver) {
+		Set<String> visited = new HashSet<>();
+		return resolveMethodViaSymbolTable(
+				typeFqn, methodName, symbolTable,
+				importResolver, visited);
+	}
+
+	private IJavaElement resolveMethodViaSymbolTable(
+			String typeFqn, String methodName,
+			SymbolTable symbolTable,
+			ImportResolver importResolver,
+			Set<String> visited) {
+		if (!visited.add(typeFqn)) {
+			return null;
+		}
+		SymbolTable.TypeSymbol typeSym =
+				symbolTable.lookupType(typeFqn);
+		if (typeSym == null) {
+			return null;
+		}
+		// Check the type's own methods
+		List<SymbolTable.MethodSymbol> methods =
+				symbolTable.lookupMethods(typeFqn, methodName);
+		if (!methods.isEmpty()) {
+			return buildResolvedCalleeForMethod(
+					methodName, typeSym);
+		}
+		// Check supertypes from the symbol table
+		for (String superName : typeSym.getSupertypeNames()) {
+			String superFqn = resolveSupertypeFqn(
+					superName, typeSym.getPackageName(),
+					importResolver);
+			if (superFqn != null) {
+				IJavaElement result =
+						resolveMethodViaSymbolTable(
+								superFqn, methodName,
+								symbolTable, importResolver,
+								visited);
+				if (result != null) {
+					return result;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves a supertype simple name to an FQN using import
+	 * resolution, same-package, and symbol table lookup.
+	 */
+	private String resolveSupertypeFqn(String superName,
+			String packageName, ImportResolver importResolver) {
+		// Strip type arguments
+		int angle = superName.indexOf('<');
+		String baseName = angle >= 0
+				? superName.substring(0, angle) : superName;
+		// Already qualified
+		if (baseName.contains(".")) {
+			return baseName;
+		}
+		// Try import resolution
+		if (importResolver != null) {
+			KotlinType resolved = KotlinType.resolve(
+					baseName, importResolver);
+			if (!resolved.isUnknown()) {
+				return resolved.getJavaFQN();
+			}
+		}
+		// Same package
+		if (packageName != null) {
+			return packageName + "." + baseName;
+		}
+		return baseName;
+	}
+
+	/**
+	 * Builds a {@link KotlinElement.ResolvedCallee} for a method found
+	 * in the symbol table.
+	 */
+	private KotlinElement.ResolvedCallee buildResolvedCalleeForMethod(
+			String methodName, SymbolTable.TypeSymbol typeSym) {
+		KotlinElement.ResolvedCallee element =
+				new KotlinElement.ResolvedCallee(methodName,
+						IJavaElement.METHOD, 0, 0);
+		KotlinElement.KotlinTypeElement declType =
+				new KotlinElement.KotlinTypeElement(
+						typeSym.getSimpleName(), null,
+						typeSym.getPackageName(), null, 0, 0);
+		element.setDeclaringType(declType);
+		return element;
+	}
+
+	/**
+	 * Resolves a top-level function imported by FQN by looking up
+	 * its facade class in the symbol table, then trying JDT
+	 * {@code findType()} on the facade class.
+	 */
+	private IJavaElement resolveFacadeFunction(
+			String functionName, String importFqn,
+			SymbolTable symbolTable, IJavaProject javaProject)
+			throws JavaModelException {
+		// Check symbol table top-level functions for facade class
+		List<SymbolTable.MethodSymbol> methods =
+				symbolTable.lookupTopLevelFunctions(functionName);
+		for (SymbolTable.MethodSymbol method : methods) {
+			String facadeFqn = method.getDeclaringTypeFQN();
+			if (facadeFqn == null) {
+				continue;
+			}
+			IType facadeType = javaProject.findType(facadeFqn);
+			if (facadeType != null && facadeType.exists()) {
+				IMethod resolved = findMethodOnType(
+						facadeType, functionName);
+				if (resolved != null) {
+					return resolved;
+				}
+			}
+			// Facade type not compiled — return ResolvedCallee
+			SymbolTable.TypeSymbol facadeSym =
+					symbolTable.lookupType(facadeFqn);
+			if (facadeSym != null) {
+				return buildResolvedCalleeForMethod(
+						functionName, facadeSym);
+			}
+		}
+		// Derive facade class from import FQN:
+		// pkg.funcName → try pkg.FileNameKt (not possible without
+		// knowing the source file, but we can try the package)
+		return null;
+	}
+
+	/**
+	 * Resolves an extension function call by enumerating types in
+	 * import packages to find facade classes containing a matching
+	 * static method. This handles Kotlin stdlib extension functions
+	 * (e.g., {@code first}, {@code toLong}) compiled as static
+	 * methods on facade classes.
+	 */
+	private IJavaElement resolveExtensionFunction(
+			String functionName, ImportResolver importResolver,
+			IJavaProject javaProject) throws JavaModelException {
+		if (javaProject == null) {
+			return null;
+		}
+		// Try explicit import first
+		if (importResolver.isExplicitImport(functionName)) {
+			String fqn = importResolver.resolve(functionName);
+			if (fqn != null) {
+				int lastDot = fqn.lastIndexOf('.');
+				if (lastDot > 0) {
+					String pkg = fqn.substring(0, lastDot);
+					IMethod found = findMethodInPackage(
+							pkg, functionName, javaProject);
+					if (found != null) {
+						return found;
+					}
+				}
+			}
+		}
+		// Try all star import packages (including defaults)
+		for (String pkg : importResolver
+				.getAllStarImportPackages()) {
+			IMethod found = findMethodInPackage(
+					pkg, functionName, javaProject);
+			if (found != null) {
+				return found;
+			}
+		}
+		// Also check symbol table via facade class resolution
+		SymbolTable symbolTable = modelManager.getSymbolTable();
+		return resolveFacadeFunction(functionName, null,
+				symbolTable, javaProject);
+	}
+
+	/**
+	 * Searches Kotlin facade classes in a package for a method with
+	 * the given name. Only checks types whose name ends with "Kt"
+	 * (Kotlin file-facade classes) to avoid false positives from
+	 * regular Java classes.
+	 */
+	private IMethod findMethodInPackage(String packageName,
+			String methodName, IJavaProject javaProject)
+			throws JavaModelException {
+		for (IPackageFragmentRoot root : javaProject
+				.getPackageFragmentRoots()) {
+			IPackageFragment fragment =
+					root.getPackageFragment(packageName);
+			if (fragment == null || !fragment.exists()) {
+				continue;
+			}
+			// Search class files (JARs) — only Kotlin facade classes
+			for (IClassFile classFile : fragment.getClassFiles()) {
+				IType type = classFile.getType();
+				if (type != null && type.exists()
+						&& type.getElementName().endsWith("Kt")) {
+					IMethod m = findMethodOnType(
+							type, methodName);
+					if (m != null) {
+						return m;
+					}
+				}
+			}
+			// Search compilation units (source) — only Kotlin facades
+			for (ICompilationUnit cu : fragment
+					.getCompilationUnits()) {
+				for (IType type : cu.getTypes()) {
+					if (type.getElementName().endsWith("Kt")) {
+						IMethod m = findMethodOnType(
+								type, methodName);
+						if (m != null) {
+							return m;
+						}
+					}
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Finds the index of the navigation/indexing suffix containing the
+	 * callee at the given offset. Returns -1 if the callee is a direct
+	 * call on the primary expression (no receiver chain).
+	 */
+	private int findNavSuffixIndex(
+			KotlinParser.PostfixUnaryExpressionContext postfix,
+			int calleeOffset) {
+		List<KotlinParser.PostfixUnarySuffixContext> suffixes =
+				postfix.postfixUnarySuffix();
+		if (suffixes == null) {
+			return -1;
+		}
+		for (int i = 0; i < suffixes.size(); i++) {
+			KotlinParser.PostfixUnarySuffixContext suffix = suffixes.get(i);
+			KotlinParser.NavigationSuffixContext nav =
+					suffix.navigationSuffix();
+			if (nav != null && nav.simpleIdentifier() != null) {
+				int navStart = nav.simpleIdentifier()
+						.getStart().getStartIndex();
+				if (navStart == calleeOffset) {
+					return i;
+				}
+			}
+			KotlinParser.IndexingSuffixContext idx =
+					suffix.indexingSuffix();
+			if (idx != null && idx.getStart() != null
+					&& idx.getStart().getStartIndex()
+							== calleeOffset) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private IMethod findMethodOnType(IType type, String methodName)
+			throws JavaModelException {
+		// Search the type itself first
+		for (IMethod m : type.getMethods()) {
+			if (methodName.equals(m.getElementName())) {
+				return m;
+			}
+		}
+		// Search supertypes using participant-level soft cache
+		String typeFqn = type.getFullyQualifiedName();
+		ITypeHierarchy hierarchy = null;
+		SoftReference<ITypeHierarchy> ref =
+				supertypeHierarchyCache.get(typeFqn);
+		if (ref != null) {
+			hierarchy = ref.get();
+		}
+		if (hierarchy == null) {
+			hierarchy = type.newSupertypeHierarchy(null);
+			supertypeHierarchyCache.put(typeFqn,
+					new SoftReference<>(hierarchy));
+		}
+		for (IType superType : hierarchy.getAllSupertypes(type)) {
+			for (IMethod m : superType.getMethods()) {
+				if (methodName.equals(m.getElementName())) {
+					return m;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Checks if the named function exists as a top-level function
+	 * in the symbol table.
+	 */
+	private boolean isKnownTopLevelFunction(String functionName,
+			SymbolTable symbolTable) {
+		return !symbolTable.lookupTopLevelFunctions(functionName)
+				.isEmpty();
+	}
+
+	/**
+	 * Builds a KotlinTypeElement for a constructor call to a Kotlin
+	 * class found in the symbol table. Returns the type element
+	 * directly (not wrapped in ResolvedCallee) because
+	 * {@code CallSearchResultCollector.getTypeOfElement()} casts
+	 * TYPE elements to IType.
+	 */
+	private KotlinElement.KotlinTypeElement buildCalleeTypeElement(
+			String typeName, String fqn,
+			KotlinCalleeFinder.CalleeMatch callee) {
+		SymbolTable symbolTable = modelManager.getSymbolTable();
+		SymbolTable.TypeSymbol sym = symbolTable.lookupType(fqn);
+		if (sym == null) {
+			return null;
+		}
+		return new KotlinElement.KotlinTypeElement(
+				sym.getSimpleName(), null,
+				sym.getPackageName(), null,
+				callee.getOffset(),
+				callee.getLength());
+	}
+
+	/**
+	 * Builds a ResolvedCallee for a top-level function found in
+	 * the symbol table. The declaring type is the file-facade class.
+	 * Returns {@code null} if the declaring type can't be determined
+	 * (caller falls through to stub).
+	 */
+	private KotlinElement.ResolvedCallee buildCalleeMethodElement(
+			String methodName,
+			KotlinCalleeFinder.CalleeMatch callee,
+			KotlinFileModel fileModel) {
+		SymbolTable symbolTable = modelManager.getSymbolTable();
+		List<SymbolTable.MethodSymbol> methods =
+				symbolTable.lookupTopLevelFunctions(methodName);
+		if (methods.isEmpty()) {
+			return null;
+		}
+		String facadeFqn =
+				methods.get(0).getDeclaringTypeFQN();
+		if (facadeFqn == null) {
+			return null;
+		}
+		SymbolTable.TypeSymbol facadeSymbol =
+				symbolTable.lookupType(facadeFqn);
+		String pkg = facadeSymbol != null
+				? facadeSymbol.getPackageName() : null;
+		String simpleName = facadeSymbol != null
+				? facadeSymbol.getSimpleName()
+				: facadeFqn.substring(
+						facadeFqn.lastIndexOf('.') + 1);
+		KotlinElement.ResolvedCallee element =
+				new KotlinElement.ResolvedCallee(methodName,
+						IJavaElement.METHOD,
+						callee.getOffset(), callee.getLength());
+		KotlinElement.KotlinTypeElement facadeType =
+				new KotlinElement.KotlinTypeElement(
+						simpleName, null, pkg, null, 0, 0);
+		element.setDeclaringType(facadeType);
+		return element;
+	}
+
+	/**
+	 * Builds a {@link KotlinElement.CalleeStub} enriched with call
+	 * site context: argument count, argument types, receiver type,
+	 * and declaring type candidates. This info helps downstream
+	 * resolution narrow the declaration search.
+	 */
+	private KotlinElement.CalleeStub buildCalleeStub(
+			KotlinCalleeFinder.CalleeMatch callee,
+			int elementType,
+			KotlinFileModel fileModel,
+			ImportResolver importResolver,
+			ExpressionTypeResolver exprResolver) {
+		String calleeName = callee.getName();
+		List<String> argTypeNames = null;
+		String receiverTypeFQN = null;
+		List<String> declaringTypeCandidates = null;
+
+		try {
+			ParseTree node = findTerminalAtOffset(
+					fileModel.getParseTree(), callee.getOffset());
+			if (node != null) {
+				// Walk up to PostfixUnaryExpression
+				ParseTree parent = node.getParent();
+				while (parent != null
+						&& !(parent instanceof KotlinParser
+								.PostfixUnaryExpressionContext)) {
+					parent = parent.getParent();
+				}
+				if (parent instanceof KotlinParser
+						.PostfixUnaryExpressionContext postfix) {
+					// Extract receiver type
+					int navIdx = findNavSuffixIndex(
+							postfix, callee.getOffset());
+					if (navIdx >= 0) {
+						KotlinType recvType =
+								exprResolver.resolveReceiverUpTo(
+										postfix, navIdx);
+						if (recvType != null
+								&& !recvType.isUnknown()) {
+							receiverTypeFQN =
+									recvType.getJavaFQN();
+						}
+					}
+					// Find the CallSuffix for argument info
+					KotlinParser.CallSuffixContext callSfx =
+							findCallSuffix(postfix, navIdx);
+					if (callSfx != null) {
+						argTypeNames = extractArgTypes(
+								callSfx, exprResolver);
+					}
+				}
+			}
+
+			// Declaring type candidates from import resolution
+			if (elementType == IJavaElement.TYPE) {
+				declaringTypeCandidates = importResolver
+						.resolveAllCandidates(calleeName);
+			}
+		} catch (Exception e) {
+			// Best-effort; fall through with whatever we collected
+		}
+
+		return new KotlinElement.CalleeStub(
+				calleeName, elementType,
+				argTypeNames, receiverTypeFQN,
+				declaringTypeCandidates);
+	}
+
+	/**
+	 * Finds the CallSuffix associated with a callee at the given
+	 * navigation suffix index in a PostfixUnaryExpression. The call
+	 * suffix is the suffix immediately after the navigation suffix
+	 * containing the callee name.
+	 */
+	private KotlinParser.CallSuffixContext findCallSuffix(
+			KotlinParser.PostfixUnaryExpressionContext postfix,
+			int navSuffixIndex) {
+		List<KotlinParser.PostfixUnarySuffixContext> suffixes =
+				postfix.postfixUnarySuffix();
+		if (suffixes == null) {
+			return null;
+		}
+		// For receiver.method(), the call suffix follows the nav suffix
+		if (navSuffixIndex >= 0
+				&& navSuffixIndex + 1 < suffixes.size()) {
+			KotlinParser.CallSuffixContext callSfx =
+					suffixes.get(navSuffixIndex + 1).callSuffix();
+			if (callSfx != null) {
+				return callSfx;
+			}
+		}
+		// For direct calls like function(), the call suffix is on
+		// the primary expression (first suffix with a callSuffix)
+		if (navSuffixIndex < 0) {
+			for (KotlinParser.PostfixUnarySuffixContext suffix
+					: suffixes) {
+				if (suffix.callSuffix() != null) {
+					return suffix.callSuffix();
+				}
+			}
+		}
+		return null;
+	}
+
+	private List<String> extractArgTypes(
+			KotlinParser.CallSuffixContext callSuffix,
+			ExpressionTypeResolver exprResolver) {
+		KotlinParser.ValueArgumentsContext args =
+				callSuffix.valueArguments();
+		if (args == null || args.valueArgument() == null) {
+			return List.of();
+		}
+		List<String> types = new ArrayList<>();
+		for (KotlinParser.ValueArgumentContext arg
+				: args.valueArgument()) {
+			if (arg.expression() != null) {
+				KotlinType argType =
+						exprResolver.resolve(arg.expression());
+				types.add(argType.isUnknown()
+						? "UNKNOWN" : argType.getJavaFQN());
+			} else {
+				types.add("UNKNOWN");
+			}
+		}
+		if (callSuffix.annotatedLambda() != null) {
+			types.add("kotlin.Function");
+		}
+		return types;
+	}
+
+	private ParseTree findTerminalAtOffset(
+			ParseTree tree, int offset) {
+		if (tree instanceof TerminalNode tn) {
+			Token t = tn.getSymbol();
+			if (t != null && offset >= t.getStartIndex()
+					&& offset <= t.getStopIndex()) {
+				return tn;
+			}
+			return null;
+		}
+		if (tree instanceof ParserRuleContext ctx) {
+			for (int i = 0; i < ctx.getChildCount(); i++) {
+				ParseTree found =
+						findTerminalAtOffset(ctx.getChild(i),
+								offset);
+				if (found != null) {
+					return found;
+				}
+			}
+		}
+		return null;
 	}
 
 	private KotlinDeclaration findCallerDeclaration(
 			List<KotlinDeclaration> declarations, IMember caller) {
 		String name = caller.getElementName();
 		if (name == null) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchParticipant.class).warn(
 					"Caller element has null name: " + caller);
 			return null;
@@ -1856,7 +2806,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				targetOffset = range.getOffset();
 			}
 		} catch (JavaModelException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchParticipant.class).warn(
 					"Failed to get source range for callee lookup",
 					e);
@@ -1939,4 +2889,5 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		String baseName = deriveClassName(path);
 		return baseName != null ? baseName + "Kt" : null;
 	}
+
 }

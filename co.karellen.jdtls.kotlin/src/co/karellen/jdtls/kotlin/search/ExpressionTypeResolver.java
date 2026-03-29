@@ -19,6 +19,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.eclipse.jdt.core.IField;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IMethod;
+import org.eclipse.jdt.core.IType;
+import org.eclipse.jdt.core.ITypeHierarchy;
+import org.eclipse.jdt.core.JavaModelException;
+import org.eclipse.jdt.core.Signature;
+
 import co.karellen.jdtls.kotlin.parser.KotlinParser;
 import co.karellen.jdtls.kotlin.parser.KotlinParserBaseVisitor;
 
@@ -39,6 +47,7 @@ public class ExpressionTypeResolver
 	private final LambdaTypeResolver lambdaTypeResolver;
 	private final OverloadResolver overloadResolver;
 	private final SubtypeChecker subtypeChecker;
+	private final IJavaProject javaProject;
 
 	public ExpressionTypeResolver(ScopeChain scopeChain,
 			SymbolTable symbolTable, ImportResolver importResolver) {
@@ -48,10 +57,19 @@ public class ExpressionTypeResolver
 	public ExpressionTypeResolver(ScopeChain scopeChain,
 			SymbolTable symbolTable, ImportResolver importResolver,
 			SubtypeChecker subtypeChecker) {
+		this(scopeChain, symbolTable, importResolver,
+				subtypeChecker, null);
+	}
+
+	public ExpressionTypeResolver(ScopeChain scopeChain,
+			SymbolTable symbolTable, ImportResolver importResolver,
+			SubtypeChecker subtypeChecker,
+			IJavaProject javaProject) {
 		this.scopeChain = scopeChain;
 		this.symbolTable = symbolTable;
 		this.importResolver = importResolver;
 		this.subtypeChecker = subtypeChecker;
+		this.javaProject = javaProject;
 		this.lambdaTypeResolver = new LambdaTypeResolver(
 				symbolTable, importResolver);
 		this.overloadResolver = subtypeChecker != null
@@ -701,6 +719,12 @@ public class ExpressionTypeResolver
 		if (receiverType == null || receiverType.isUnknown()) {
 			return KotlinType.UNKNOWN;
 		}
+		// Try JDT first for compiled types
+		KotlinType jdtResult = resolveMemberTypeViaJdt(
+				receiverType, memberName);
+		if (jdtResult != null && !jdtResult.isUnknown()) {
+			return jdtResult;
+		}
 		// Look up type in symbol table by Kotlin FQN
 		SymbolTable.TypeSymbol typeSym = symbolTable
 				.lookupType(receiverType.getFQN());
@@ -725,15 +749,45 @@ public class ExpressionTypeResolver
 		return KotlinType.UNKNOWN;
 	}
 
+	/**
+	 * Resolves a member (field) type via JDT's type model.
+	 */
+	private KotlinType resolveMemberTypeViaJdt(
+			KotlinType receiverType, String memberName) {
+		if (javaProject == null) {
+			return null;
+		}
+		try {
+			String fqn = receiverType.getJavaFQN();
+			if (fqn == null) {
+				return null;
+			}
+			IType type = javaProject.findType(fqn);
+			if (type == null || !type.exists()) {
+				return null;
+			}
+			for (IField f : type.getFields()) {
+				if (memberName.equals(f.getElementName())) {
+					return resolveJdtSignature(
+							f.getTypeSignature(), type);
+				}
+			}
+		} catch (JavaModelException e) {
+			// JDT model unavailable; let callers try symbol table
+		}
+		return null;
+	}
+
 	private KotlinType resolveCallReturnType(KotlinType receiverType,
 			KotlinParser.CallSuffixContext callCtx) {
 		if (receiverType == null || receiverType.isUnknown()) {
 			return KotlinType.UNKNOWN;
 		}
-		// Check if this is a constructor call (receiverType is a class name)
-		SymbolTable.TypeSymbol typeSym = symbolTable
-				.lookupType(receiverType.getFQN());
-		if (typeSym != null) {
+		// Uppercase name followed by () is a constructor call —
+		// the return type is the type itself
+		String simpleName = receiverType.getSimpleName();
+		if (simpleName != null && !simpleName.isEmpty()
+				&& Character.isUpperCase(simpleName.charAt(0))) {
 			return receiverType;
 		}
 		return KotlinType.UNKNOWN;
@@ -744,6 +798,13 @@ public class ExpressionTypeResolver
 			KotlinParser.CallSuffixContext callCtx) {
 		if (receiverType == null || receiverType.isUnknown()) {
 			return KotlinType.UNKNOWN;
+		}
+
+		// Try JDT first for compiled types (Java libraries, JDK)
+		KotlinType jdtResult = resolveMethodCallViaJdt(
+				receiverType, methodName);
+		if (jdtResult != null && !jdtResult.isUnknown()) {
+			return jdtResult;
 		}
 
 		// Try overload resolution if available
@@ -779,6 +840,86 @@ public class ExpressionTypeResolver
 					return resolveTypeName(returnType);
 				}
 			}
+		}
+		return KotlinType.UNKNOWN;
+	}
+
+	/**
+	 * Resolves a method call return type via JDT's type model. Finds the
+	 * declaring type via {@code findType()}, locates the method, and
+	 * extracts its return type signature.
+	 */
+	private KotlinType resolveMethodCallViaJdt(
+			KotlinType receiverType, String methodName) {
+		if (javaProject == null) {
+			return null;
+		}
+		try {
+			String fqn = receiverType.getJavaFQN();
+			if (fqn == null) {
+				return null;
+			}
+			IType type = javaProject.findType(fqn);
+			if (type == null || !type.exists()) {
+				return null;
+			}
+			// Search the type itself first
+			for (IMethod m : type.getMethods()) {
+				if (methodName.equals(m.getElementName())) {
+					return extractReturnType(m, type);
+				}
+			}
+			// Search all supertypes (classes + interfaces)
+			ITypeHierarchy hierarchy =
+					type.newSupertypeHierarchy(null);
+			for (IType superType : hierarchy
+					.getAllSupertypes(type)) {
+				for (IMethod m : superType.getMethods()) {
+					if (methodName.equals(
+							m.getElementName())) {
+						return extractReturnType(m, superType);
+					}
+				}
+			}
+		} catch (JavaModelException e) {
+			// Fall through to symbol table
+		}
+		return null;
+	}
+
+	private KotlinType extractReturnType(IMethod method,
+			IType declaringType) throws JavaModelException {
+		String returnSig = method.getReturnType();
+		if (returnSig == null
+				|| Signature.SIG_VOID.equals(returnSig)) {
+			return KotlinType.UNKNOWN;
+		}
+		return resolveJdtSignature(returnSig, declaringType);
+	}
+
+	/**
+	 * Converts a JDT type signature to a KotlinType, resolving
+	 * unqualified names via the declaring type's context.
+	 */
+	private KotlinType resolveJdtSignature(String typeSig,
+			IType context) throws JavaModelException {
+		if (typeSig == null) {
+			return KotlinType.UNKNOWN;
+		}
+		String typeName = Signature.toString(
+				Signature.getTypeErasure(typeSig));
+		if (!typeName.contains(".")) {
+			String[][] resolved = context.resolveType(typeName);
+			if (resolved != null && resolved.length > 0) {
+				return new KotlinType(
+						resolved[0][0], resolved[0][1]);
+			}
+		}
+		int lastDot = typeName.lastIndexOf('.');
+		if (lastDot > 0) {
+			return new KotlinType(
+					typeName.substring(0, lastDot),
+					typeName.substring(lastDot + 1));
 		}
 		return KotlinType.UNKNOWN;
 	}
