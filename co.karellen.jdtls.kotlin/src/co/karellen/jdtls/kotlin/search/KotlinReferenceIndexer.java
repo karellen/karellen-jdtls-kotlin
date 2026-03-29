@@ -22,8 +22,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.tree.ParseTree;
 
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.internal.core.search.indexing.IIndexConstants;
 import org.eclipse.jdt.internal.core.search.matching.MethodPattern;
@@ -620,8 +622,8 @@ public class KotlinReferenceIndexer extends KotlinParserBaseVisitor<Void> {
 	}
 
 	private static void warnNullIdentifier(String context,
-			org.antlr.v4.runtime.ParserRuleContext ctx) {
-		org.eclipse.core.runtime.Platform.getLog(
+			ParserRuleContext ctx) {
+		Platform.getLog(
 				KotlinReferenceIndexer.class).warn(
 				"Null simpleIdentifier in " + context + " at "
 						+ ctx.getStart().getLine() + ":"

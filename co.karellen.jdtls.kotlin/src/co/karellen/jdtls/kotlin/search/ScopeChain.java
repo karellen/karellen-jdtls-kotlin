@@ -18,9 +18,14 @@ package co.karellen.jdtls.kotlin.search;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.antlr.v4.runtime.tree.ParseTree;
+
+import co.karellen.jdtls.kotlin.parser.KotlinParser;
 
 /**
  * Manages a stack of scopes for name-to-type resolution during expression
@@ -91,21 +96,19 @@ public class ScopeChain {
 			}
 		}
 
-		// Try import resolution
-		String fqn = importResolver.resolve(name);
-		if (fqn != null && !fqn.equals(name)) {
+		// Try KotlinType.resolve which handles auto-imports
+		// (ArrayList → kotlin.collections.ArrayList, etc.)
+		KotlinType resolved = KotlinType.resolve(name,
+				importResolver);
+		if (!resolved.isUnknown()) {
 			// Check if it's a known type in the symbol table
-			SymbolTable.TypeSymbol typeSym = symbolTable.lookupType(fqn);
+			SymbolTable.TypeSymbol typeSym = symbolTable
+					.lookupType(resolved.getFQN());
 			if (typeSym != null) {
 				return new KotlinType(typeSym.getPackageName(),
 						typeSym.getSimpleName());
 			}
-			// Even if not in symbol table, return the resolved FQN as a type
-			int lastDot = fqn.lastIndexOf('.');
-			if (lastDot >= 0) {
-				return new KotlinType(fqn.substring(0, lastDot),
-						fqn.substring(lastDot + 1));
-			}
+			return resolved;
 		}
 
 		// Try symbol table by simple name
@@ -171,6 +174,34 @@ public class ScopeChain {
 	public void initClassScope(
 			KotlinDeclaration.TypeDeclaration typeDecl,
 			String packageName) {
+		initClassScope(typeDecl, packageName, null, null);
+	}
+
+	/**
+	 * Initializes a class scope with property type inference from
+	 * initializer expressions. For properties without a type annotation,
+	 * uses the {@code ExpressionTypeResolver} to infer the type from
+	 * the property's initializer expression in the parse tree.
+	 *
+	 * @param typeDecl     the type declaration
+	 * @param packageName  the package name of the enclosing file
+	 * @param exprResolver the expression type resolver, or {@code null}
+	 * @param parseTree    the full parse tree of the file, or {@code null}
+	 */
+	public void initClassScope(
+			KotlinDeclaration.TypeDeclaration typeDecl,
+			String packageName,
+			ExpressionTypeResolver exprResolver,
+			ParseTree parseTree) {
+		// Build a map of property name → initializer expression from
+		// the parse tree for properties without type annotations
+		Map<String, KotlinParser.ExpressionContext> initializerMap =
+				new HashMap<>();
+		if (exprResolver != null && parseTree != null) {
+			collectPropertyInitializers(parseTree, typeDecl,
+					initializerMap);
+		}
+
 		pushScope();
 
 		// Add "this" binding
@@ -185,6 +216,12 @@ public class ScopeChain {
 				String typeName = prop.getTypeName();
 				if (typeName != null) {
 					addBinding(prop.getName(), resolveTypeName(typeName));
+				} else if (exprResolver != null
+						&& initializerMap.containsKey(
+								prop.getName())) {
+					KotlinType inferred = exprResolver.resolve(
+							initializerMap.get(prop.getName()));
+					addBinding(prop.getName(), inferred);
 				} else {
 					addBinding(prop.getName(), KotlinType.UNKNOWN);
 				}
@@ -192,7 +229,6 @@ public class ScopeChain {
 				addBinding(member.getName(), KotlinType.UNKNOWN);
 			} else if (member instanceof KotlinDeclaration.TypeDeclaration) {
 				KotlinDeclaration.TypeDeclaration nested = (KotlinDeclaration.TypeDeclaration) member;
-				// Companion object members are directly accessible
 				if ((nested.getModifiers()
 						& KotlinDeclaration.COMPANION) != 0) {
 					for (KotlinDeclaration companionMember : nested
@@ -203,6 +239,14 @@ public class ScopeChain {
 							if (typeName != null) {
 								addBinding(prop.getName(),
 										resolveTypeName(typeName));
+							} else if (exprResolver != null
+									&& initializerMap.containsKey(
+											prop.getName())) {
+								KotlinType inferred =
+										exprResolver.resolve(
+												initializerMap.get(
+														prop.getName()));
+								addBinding(prop.getName(), inferred);
 							} else {
 								addBinding(prop.getName(),
 										KotlinType.UNKNOWN);
@@ -213,11 +257,85 @@ public class ScopeChain {
 						}
 					}
 				}
-				// Add the nested type itself as a binding
 				addBinding(nested.getName(), new KotlinType(packageName,
 						typeDecl.getName() + "." + nested.getName()));
 			}
 		}
+	}
+
+	/**
+	 * Collects property initializer expressions from the ANTLR parse tree
+	 * for a class declaration. Only collects initializers for properties
+	 * that don't have an explicit type annotation.
+	 */
+	private void collectPropertyInitializers(ParseTree parseTree,
+			KotlinDeclaration.TypeDeclaration typeDecl,
+			Map<String, KotlinParser.ExpressionContext> result) {
+		KotlinParser.ClassDeclarationContext classCtx =
+				findClassDeclaration(parseTree,
+						typeDecl.getStartOffset(),
+						typeDecl.getEndOffset());
+		if (classCtx == null || classCtx.classBody() == null) {
+			return;
+		}
+		KotlinParser.ClassMemberDeclarationsContext members =
+				classCtx.classBody().classMemberDeclarations();
+		if (members == null) {
+			return;
+		}
+		for (KotlinParser.ClassMemberDeclarationContext memberCtx
+				: members.classMemberDeclaration()) {
+			KotlinParser.DeclarationContext declCtx =
+					memberCtx.declaration();
+			if (declCtx == null) {
+				continue;
+			}
+			KotlinParser.PropertyDeclarationContext propCtx =
+					declCtx.propertyDeclaration();
+			if (propCtx == null) {
+				continue;
+			}
+			KotlinParser.VariableDeclarationContext varDecl =
+					propCtx.variableDeclaration();
+			if (varDecl == null
+					|| varDecl.simpleIdentifier() == null) {
+				continue;
+			}
+			// Only collect if no type annotation
+			if (varDecl.type() != null) {
+				continue;
+			}
+			KotlinParser.ExpressionContext initExpr =
+					propCtx.expression();
+			if (initExpr != null) {
+				result.put(varDecl.simpleIdentifier().getText(),
+						initExpr);
+			}
+		}
+	}
+
+	/**
+	 * Finds a {@code ClassDeclarationContext} in the parse tree matching
+	 * the given start/end offsets.
+	 */
+	private KotlinParser.ClassDeclarationContext findClassDeclaration(
+			ParseTree node, int startOffset, int endOffset) {
+		if (node instanceof KotlinParser.ClassDeclarationContext ctx) {
+			if (ctx.getStart() != null && ctx.getStop() != null
+					&& ctx.getStart().getStartIndex() == startOffset
+					&& ctx.getStop().getStopIndex() == endOffset) {
+				return ctx;
+			}
+		}
+		for (int i = 0; i < node.getChildCount(); i++) {
+			KotlinParser.ClassDeclarationContext result =
+					findClassDeclaration(node.getChild(i),
+							startOffset, endOffset);
+			if (result != null) {
+				return result;
+			}
+		}
+		return null;
 	}
 
 	/**

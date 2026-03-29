@@ -83,16 +83,79 @@ public class KotlinType {
 		map.put("kotlin.collections.ListIterator", "java.util.ListIterator");
 		map.put("kotlin.collections.MutableListIterator",
 				"java.util.ListIterator");
-		// Other equivalences
+		map.put("kotlin.collections.Map.Entry", "java.util.Map$Entry");
+		map.put("kotlin.collections.MutableMap.MutableEntry",
+				"java.util.Map$Entry");
+		// Concrete collection typealiases (kotlin/collections/TypeAliases.kt)
+		map.put("kotlin.collections.ArrayList", "java.util.ArrayList");
+		map.put("kotlin.collections.HashMap", "java.util.HashMap");
+		map.put("kotlin.collections.LinkedHashMap",
+				"java.util.LinkedHashMap");
+		map.put("kotlin.collections.HashSet", "java.util.HashSet");
+		map.put("kotlin.collections.LinkedHashSet",
+				"java.util.LinkedHashSet");
+		map.put("kotlin.collections.RandomAccess",
+				"java.util.RandomAccess");
+		// Text typealiases (kotlin/text/TypeAliases.kt)
+		map.put("kotlin.text.StringBuilder",
+				"java.lang.StringBuilder");
+		map.put("kotlin.text.Appendable", "java.lang.Appendable");
+		map.put("kotlin.text.CharacterCodingException",
+				"java.nio.charset.CharacterCodingException");
+		// Core equivalences
 		map.put("kotlin.Number", "java.lang.Number");
 		map.put("kotlin.Comparable", "java.lang.Comparable");
+		map.put("kotlin.Comparator", "java.util.Comparator");
 		map.put("kotlin.CharSequence", "java.lang.CharSequence");
 		map.put("kotlin.Throwable", "java.lang.Throwable");
 		map.put("kotlin.Enum", "java.lang.Enum");
 		map.put("kotlin.Cloneable", "java.lang.Cloneable");
 		map.put("kotlin.Annotation", "java.lang.annotation.Annotation");
+		// Exception typealiases (kotlin/TypeAliases.kt)
+		map.put("kotlin.Error", "java.lang.Error");
+		map.put("kotlin.Exception", "java.lang.Exception");
+		map.put("kotlin.RuntimeException",
+				"java.lang.RuntimeException");
+		map.put("kotlin.IllegalArgumentException",
+				"java.lang.IllegalArgumentException");
+		map.put("kotlin.IllegalStateException",
+				"java.lang.IllegalStateException");
+		map.put("kotlin.IndexOutOfBoundsException",
+				"java.lang.IndexOutOfBoundsException");
+		map.put("kotlin.UnsupportedOperationException",
+				"java.lang.UnsupportedOperationException");
+		map.put("kotlin.ArithmeticException",
+				"java.lang.ArithmeticException");
+		map.put("kotlin.NumberFormatException",
+				"java.lang.NumberFormatException");
+		map.put("kotlin.NullPointerException",
+				"java.lang.NullPointerException");
+		map.put("kotlin.ClassCastException",
+				"java.lang.ClassCastException");
+		map.put("kotlin.AssertionError", "java.lang.AssertionError");
+		map.put("kotlin.NoSuchElementException",
+				"java.util.NoSuchElementException");
+		map.put("kotlin.ConcurrentModificationException",
+				"java.util.ConcurrentModificationException");
 		KOTLIN_TO_JAVA = Collections.unmodifiableMap(map);
+
+		// Reverse lookup: simple name → Kotlin FQN for auto-imported
+		// types. Used by resolve() to map e.g. "Map" → "kotlin.collections.Map"
+		// before the ImportResolver fallback which would misresolve
+		// it to the current package.
+		Map<String, String> autoMap = new HashMap<>();
+		for (String kotlinFqn : map.keySet()) {
+			int dot = kotlinFqn.lastIndexOf('.');
+			String simpleName = dot >= 0
+					? kotlinFqn.substring(dot + 1) : kotlinFqn;
+			// Don't overwrite: first entry wins (non-Mutable
+			// variants are listed first)
+			autoMap.putIfAbsent(simpleName, kotlinFqn);
+		}
+		KOTLIN_AUTO_IMPORTS = Collections.unmodifiableMap(autoMap);
 	}
+
+	private static final Map<String, String> KOTLIN_AUTO_IMPORTS;
 
 	private final String packageName;
 	private final String simpleName;
@@ -289,6 +352,17 @@ public class KotlinType {
 		default:
 			String fqn = importResolver.resolve(typeName);
 			if (fqn != null && fqn.contains(".")) {
+				// Check if this is a same-package fallback that
+				// should be overridden by a Kotlin auto-import.
+				String autoFqn = KOTLIN_AUTO_IMPORTS.get(typeName);
+				if (autoFqn != null && !fqn.equals(autoFqn)
+						&& !importResolver.isExplicitImport(
+								typeName)) {
+					int dot = autoFqn.lastIndexOf('.');
+					return new KotlinType(
+							autoFqn.substring(0, dot),
+							autoFqn.substring(dot + 1));
+				}
 				int lastDot = fqn.lastIndexOf('.');
 				return new KotlinType(fqn.substring(0, lastDot),
 						fqn.substring(lastDot + 1));

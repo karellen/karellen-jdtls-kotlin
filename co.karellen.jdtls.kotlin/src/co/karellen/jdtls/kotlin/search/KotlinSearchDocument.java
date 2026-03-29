@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.core.search.SearchParticipant;
@@ -82,7 +83,7 @@ public class KotlinSearchDocument extends SearchDocument {
 			byteContents = is.readAllBytes();
 			charContents = new String(byteContents, StandardCharsets.UTF_8).toCharArray();
 		} catch (CoreException | IOException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinSearchDocument.class).warn(
 					"Failed to read search document: "
 							+ getPath(), e);

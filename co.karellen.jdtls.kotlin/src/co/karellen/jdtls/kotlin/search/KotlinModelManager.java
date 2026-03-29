@@ -21,12 +21,19 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.jdt.core.IJavaElement;
 
 /**
  * Central cache for parsed Kotlin file models and compilation units.
  * All consumers (search participant, compilation unit, future codeSelect)
  * access parsed results through this singleton.
+ *
+ * <p>File models use strong references because they represent indexed
+ * workspace files and must survive between indexing and query time.
+ * Without strong references, GC collects them and every query
+ * re-parses all .kt files from scratch. Compilation units use soft
+ * references since they're cheaper to rebuild.
  *
  * @author Arcadiy Ivanov
  */
@@ -36,7 +43,7 @@ public final class KotlinModelManager {
 
 	private final KotlinFileParser parser = new KotlinFileParser();
 	private final SymbolTable symbolTable = new SymbolTable();
-	private final ConcurrentHashMap<String, SoftReference<KotlinFileModel>>
+	private final ConcurrentHashMap<String, KotlinFileModel>
 			fileModelCache = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, SoftReference<KotlinCompilationUnit>>
 			cuCache = new ConcurrentHashMap<>();
@@ -74,15 +81,10 @@ public final class KotlinModelManager {
 		if (warnIfNull(path, "getFileModel")) {
 			return null;
 		}
-		purgeStaleEntries();
 
-		SoftReference<KotlinFileModel> ref = fileModelCache.get(path);
-		if (ref != null) {
-			KotlinFileModel cached = ref.get();
-			if (cached != null) {
-				return cached;
-			}
-			fileModelCache.remove(path);
+		KotlinFileModel cached = fileModelCache.get(path);
+		if (cached != null) {
+			return cached;
 		}
 
 		if (source == null || source.isEmpty()) {
@@ -92,11 +94,10 @@ public final class KotlinModelManager {
 			boolean isScript = path.endsWith(".kts");
 			KotlinFileModel fileModel = parser.parse(source,
 					isScript);
-			fileModelCache.put(path,
-					new SoftReference<>(fileModel));
+			fileModelCache.put(path, fileModel);
 			return fileModel;
 		} catch (Exception e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinModelManager.class).error(
 					"Kotlin file parse failed for " + path, e);
 			return null;
@@ -121,7 +122,7 @@ public final class KotlinModelManager {
 		if (warnIfNull(path, "putFileModel")) {
 			return;
 		}
-		fileModelCache.put(path, new SoftReference<>(fileModel));
+		fileModelCache.put(path, fileModel);
 	}
 
 	/**
@@ -170,8 +171,7 @@ public final class KotlinModelManager {
 	 * from the cached (or freshly parsed) file model.
 	 */
 	void populateCompilationUnit(KotlinCompilationUnit cu, String path) {
-		KotlinFileModel model = fileModelCache.get(path) != null
-				? fileModelCache.get(path).get() : null;
+		KotlinFileModel model = fileModelCache.get(path);
 		if (model == null) {
 			// Try parsing from the file contents
 			try {
@@ -180,7 +180,7 @@ public final class KotlinModelManager {
 					model = getFileModel(path, source);
 				}
 			} catch (Exception e) {
-				org.eclipse.core.runtime.Platform.getLog(
+				Platform.getLog(
 						KotlinModelManager.class).warn(
 						"Failed to parse Kotlin source for CU "
 								+ "population: " + path, e);
@@ -234,7 +234,7 @@ public final class KotlinModelManager {
 
 	private static boolean warnIfNull(Object value, String method) {
 		if (value == null) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinModelManager.class).warn(
 					method + " called with null argument");
 			return true;
@@ -243,8 +243,6 @@ public final class KotlinModelManager {
 	}
 
 	private void purgeStaleEntries() {
-		fileModelCache.entrySet()
-				.removeIf(e -> e.getValue().get() == null);
 		cuCache.entrySet()
 				.removeIf(e -> e.getValue().get() == null);
 	}

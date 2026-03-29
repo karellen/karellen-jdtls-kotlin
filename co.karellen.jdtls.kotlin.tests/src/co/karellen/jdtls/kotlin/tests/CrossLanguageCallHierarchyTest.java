@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +39,9 @@ import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.IMember;
 import org.eclipse.jdt.core.IMethod;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.jdt.core.IType;
+import org.eclipse.jdt.core.ITypeHierarchy;
 import org.eclipse.jdt.core.search.IJavaSearchConstants;
 import org.eclipse.jdt.core.search.IJavaSearchScope;
 import org.eclipse.jdt.core.search.SearchDocument;
@@ -51,9 +54,12 @@ import org.eclipse.jdt.core.manipulation.JavaManipulation;
 import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
 import org.eclipse.jdt.internal.corext.callhierarchy.CallHierarchyCore;
 import org.eclipse.jdt.internal.corext.callhierarchy.MethodWrapper;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 
 import co.karellen.jdtls.kotlin.search.KotlinCompilationUnit;
 import co.karellen.jdtls.kotlin.search.KotlinElement;
@@ -67,13 +73,14 @@ import co.karellen.jdtls.kotlin.search.KotlinModelManager;
  *
  * @author Arcadiy Ivanov
  */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class CrossLanguageCallHierarchyTest {
 
 	private static final String PROJECT_NAME = "CrossLangCallTest";
 	private IJavaProject project;
 
-	@BeforeEach
-	public void setUp() throws CoreException {
+	@BeforeAll
+	public void setUpClass() throws CoreException {
 		// Initialize preference node for JavaManipulation — required by
 		// CallHierarchyCore.isShowAll() which reads preferences via
 		// InstanceScope/DefaultScope. In a full jdtls, this is set by
@@ -83,14 +90,25 @@ public class CrossLanguageCallHierarchyTest {
 			JavaManipulation.setPreferenceNodeId(
 					"co.karellen.jdtls.kotlin.tests");
 		}
-		SearchParticipantRegistry.reset();
-		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
+		project = TestHelpers.createJavaProjectWithJRE(PROJECT_NAME, "src");
 	}
 
-	@AfterEach
-	public void tearDown() throws CoreException {
+	@AfterAll
+	public void tearDownClass() throws CoreException {
 		TestHelpers.deleteProject(PROJECT_NAME);
 		project = null;
+	}
+
+	@BeforeEach
+	public void setUp() throws CoreException {
+		SearchParticipantRegistry.reset();
+		// Clean src folder contents from previous test
+		org.eclipse.core.resources.IFolder srcFolder =
+				project.getProject().getFolder("src");
+		for (org.eclipse.core.resources.IResource member
+				: srcFolder.members()) {
+			member.delete(true, null);
+		}
 	}
 
 	@Test
@@ -357,17 +375,39 @@ public class CrossLanguageCallHierarchyTest {
 		assertTrue(callees.length >= 3,
 				"Should find at least 3 callees, found: " + callees.length);
 
-		Set<String> calleeNames = new HashSet<>();
+		Map<String, IMember> calleesByName = new LinkedHashMap<>();
 		for (SearchMatch match : callees) {
 			IMember callee = (IMember) match.getElement();
-			calleeNames.add(callee.getElementName());
+			calleesByName.put(callee.getElementName(), callee);
 		}
-		assertTrue(calleeNames.contains("DataProcessor"),
-				"Should find DataProcessor constructor call");
-		assertTrue(calleeNames.contains("transform"),
-				"Should find transform method call");
-		assertTrue(calleeNames.contains("validate"),
-				"Should find validate method call");
+		assertTrue(calleesByName.containsKey("DataProcessor"),
+				"Should find DataProcessor constructor call. "
+				+ "Found: " + calleesByName.keySet());
+		assertTrue(calleesByName.containsKey("transform"),
+				"Should find transform method call. "
+				+ "Found: " + calleesByName.keySet());
+		assertTrue(calleesByName.containsKey("validate"),
+				"Should find validate method call. "
+				+ "Found: " + calleesByName.keySet());
+
+		// DataProcessor is undefined — should be a stub
+		IMember dpCallee = calleesByName.get("DataProcessor");
+		assertFalse(dpCallee.exists(),
+				"DataProcessor is undefined — should be a stub. "
+				+ "Class: " + dpCallee.getClass().getSimpleName());
+
+		// transform/validate receivers are unresolvable (svc type
+		// inferred from undefined DataProcessor) — should be stubs
+		IMember transformCallee = calleesByName.get("transform");
+		assertFalse(transformCallee.exists(),
+				"transform receiver unresolvable — should be stub. "
+				+ "Class: " + transformCallee.getClass()
+						.getSimpleName());
+		IMember validateCallee = calleesByName.get("validate");
+		assertFalse(validateCallee.exists(),
+				"validate receiver unresolvable — should be stub. "
+				+ "Class: " + validateCallee.getClass()
+						.getSimpleName());
 	}
 
 	@Test
@@ -398,32 +438,44 @@ public class CrossLanguageCallHierarchyTest {
 				caller, participant.getDocument(path), null);
 
 		// StringBuilder → TYPE (constructor), append → METHOD, println → METHOD
-		Map<Integer, List<SearchMatch>> byType = Arrays.stream(callees)
-				.collect(Collectors.groupingBy(
-						m -> ((IMember) m.getElement()).getElementType()));
+		Map<String, IMember> calleesByName = new LinkedHashMap<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			calleesByName.put(callee.getElementName(), callee);
+		}
 
-		assertTrue(byType.containsKey(IJavaElement.TYPE),
-				"Should have TYPE callees (constructor calls)");
-		assertTrue(byType.containsKey(IJavaElement.METHOD),
-				"Should have METHOD callees (method calls)");
+		// StringBuilder constructor — resolved via java.lang.* default import
+		IMember sbCallee = calleesByName.get("StringBuilder");
+		assertNotNull(sbCallee,
+				"Should find StringBuilder. Found: "
+				+ calleesByName.keySet());
+		assertEquals(IJavaElement.TYPE, sbCallee.getElementType(),
+				"StringBuilder should be TYPE (constructor)");
+		assertTrue(sbCallee.exists(),
+				"StringBuilder should resolve via java.lang.* "
+				+ "default import. Class: "
+				+ sbCallee.getClass().getSimpleName());
 
-		// StringBuilder should be TYPE
-		boolean foundCtorAsType = Arrays.stream(callees)
-				.anyMatch(m -> ((IMember) m.getElement()).getElementName()
-						.equals("StringBuilder")
-						&& ((IMember) m.getElement()).getElementType()
-						== IJavaElement.TYPE);
-		assertTrue(foundCtorAsType,
-				"StringBuilder() should be reported as TYPE (constructor)");
+		// append — resolved via assignment-inferred StringBuilder type
+		IMember appendCallee = calleesByName.get("append");
+		assertNotNull(appendCallee,
+				"Should find append. Found: "
+				+ calleesByName.keySet());
+		assertEquals(IJavaElement.METHOD, appendCallee.getElementType(),
+				"append should be METHOD");
+		assertTrue(appendCallee.exists(),
+				"append should resolve via inferred StringBuilder "
+				+ "receiver. Class: "
+				+ appendCallee.getClass().getSimpleName());
 
-		// append should be METHOD
-		boolean foundMethodCall = Arrays.stream(callees)
-				.anyMatch(m -> ((IMember) m.getElement()).getElementName()
-						.equals("append")
-						&& ((IMember) m.getElement()).getElementType()
-						== IJavaElement.METHOD);
-		assertTrue(foundMethodCall,
-				"append() should be reported as METHOD");
+		// println — Kotlin stdlib, not in JRE classpath, stub
+		IMember printlnCallee = calleesByName.get("println");
+		assertNotNull(printlnCallee,
+				"Should find println. Found: "
+				+ calleesByName.keySet());
+		assertEquals(IJavaElement.METHOD,
+				printlnCallee.getElementType(),
+				"println should be METHOD");
 	}
 
 	@Test
@@ -566,7 +618,12 @@ public class CrossLanguageCallHierarchyTest {
 	}
 
 	@Test
-	public void testLocateCalleesStubExists() throws CoreException {
+	public void testLocateCalleesResolvesAutoImportedTypes()
+			throws CoreException {
+		// ArrayList is auto-imported via kotlin.collections →
+		// java.util.ArrayList. The constructor should resolve to
+		// the real JDT IType, and x.add() should resolve via
+		// assignment-inferred type.
 		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callhier");
 		TestHelpers.createFile(
 				"/" + PROJECT_NAME + "/src/callhier/StubTest.kt",
@@ -591,19 +648,345 @@ public class CrossLanguageCallHierarchyTest {
 				caller, participant.getDocument(path), null);
 
 		assertTrue(callees.length >= 2,
-				"Should find at least 2 callees");
+				"Should find at least 2 callees (ArrayList ctor + add)");
 
-		// All callee elements should be stubs that don't "exist"
-		// (so resolveCallee in CalleeMethodWrapper will do a declaration search)
+		// Verify each callee resolved correctly
+		Map<String, IMember> calleesByName = new LinkedHashMap<>();
 		for (SearchMatch match : callees) {
 			IMember callee = (IMember) match.getElement();
-			assertFalse(callee.exists(),
-					"Callee stub should return false from exists()");
-			assertNotNull(callee.getElementName(),
-					"Callee stub should have a name");
-			assertTrue(callee.getElementType() == IJavaElement.METHOD
-					|| callee.getElementType() == IJavaElement.TYPE,
-					"Callee stub should be METHOD or TYPE");
+			calleesByName.put(callee.getElementName(), callee);
+		}
+
+		// ArrayList constructor → resolved IType
+		IMember arrayListCallee = calleesByName.get("ArrayList");
+		assertNotNull(arrayListCallee,
+				"Should find ArrayList constructor. Found: "
+				+ calleesByName.keySet());
+		assertTrue(arrayListCallee.exists(),
+				"ArrayList should resolve to real IType via "
+				+ "kotlin.collections auto-import → java.util."
+				+ "ArrayList. Class: "
+				+ arrayListCallee.getClass().getSimpleName());
+		assertEquals(IJavaElement.TYPE,
+				arrayListCallee.getElementType(),
+				"ArrayList should be TYPE (constructor)");
+
+		// add → resolved IMethod on ArrayList
+		IMember addCallee = calleesByName.get("add");
+		assertNotNull(addCallee,
+				"Should find add() callee. Found: "
+				+ calleesByName.keySet());
+		assertTrue(addCallee.exists(),
+				"add() should resolve to real IMethod via "
+				+ "assignment-inferred ArrayList type. Class: "
+				+ addCallee.getClass().getSimpleName());
+		assertEquals(IJavaElement.METHOD,
+				addCallee.getElementType(),
+				"add should be METHOD");
+	}
+
+	@Test
+	public void testLocateCalleesResolvesIndexingSuffix()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callidx");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callidx/IndexCaller.kt",
+				"package callidx\n"
+				+ "\n"
+				+ "fun lookupValue(m: Map<String, String>,"
+				+ " key: String): String? {\n"
+				+ "    return m[key]\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("lookupValue", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find lookupValue declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		boolean foundGet = false;
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if ("get".equals(callee.getElementName())) {
+				foundGet = true;
+				assertTrue(callee.exists(),
+						"get callee should resolve to real "
+						+ "IMethod (Map.get), not a stub. "
+						+ "Class: " + callee.getClass()
+								.getSimpleName());
+			}
+		}
+		assertTrue(foundGet, "Should find get callee from "
+				+ "indexing suffix m[key]");
+	}
+
+	@Test
+	public void testLocateCalleesResolvesChainedMethodCalls()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/callchain");
+		// Test chained calls: receiver.method1().method2()
+		// The first call (add) resolves via receiver type;
+		// second call (contains) resolves on the same list variable
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/callchain/ChainCaller.kt",
+				"package callchain\n"
+				+ "\n"
+				+ "fun chainTest(items: MutableList<String>): Int {\n"
+				+ "    items.add(\"hello\")\n"
+				+ "    items.add(\"world\")\n"
+				+ "    items.contains(\"hello\")\n"
+				+ "    return items.size\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("chainTest", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find chainTest declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("add"),
+				"add callee should resolve to real IMethod. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("contains"),
+				"contains callee should resolve to real IMethod. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	@Test
+	public void testLocateCalleesResolvesImplicitThis()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/implthis");
+		// Use ArrayList (resolvable via JDT) as enclosing type's
+		// superclass so implicit this method calls resolve through it
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/implthis/Container.kt",
+				"package implthis\n"
+				+ "\n"
+				+ "import java.util.ArrayList\n"
+				+ "\n"
+				+ "class Container : ArrayList<String>() {\n"
+				+ "    fun doWork(): Boolean {\n"
+				+ "        add(\"hello\")\n"
+				+ "        add(\"world\")\n"
+				+ "        return contains(\"hello\")\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("doWork", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find doWork declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("add"),
+				"add() via implicit this should resolve. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("contains"),
+				"contains() via implicit this should resolve. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	@Test
+	public void testLocateCalleesResolvesSupertypeMethods()
+			throws CoreException {
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/supermethod");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/supermethod/SuperTest.kt",
+				"package supermethod\n"
+				+ "\n"
+				+ "fun superTest(list: MutableList<String>): Boolean {\n"
+				+ "    list.add(\"item\")\n"
+				+ "    return list.contains(\"item\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("superTest", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find superTest declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		// add is on List/Collection (supertype), not directly on
+		// the concrete type
+		assertTrue(resolvedNames.contains("add"),
+				"add() should resolve via supertype hierarchy. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("contains"),
+				"contains() should resolve via supertype hierarchy. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	@Test
+	public void testOutgoingCallsMixedResolvedAndStubs()
+			throws Exception {
+		// Reproduces the crash in test 4.5: a method with both
+		// resolvable callees (constructors, methods on typed params)
+		// and unresolvable callees (methods on assignment-inferred
+		// vars from project types). The mix must not cause NPE in
+		// CallSearchResultCollector.getTypeOfElement().
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/mixch");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/mixch/MixedCaller.kt",
+				"package mixch\n"
+				+ "\n"
+				+ "class SomeService {\n"
+				+ "    fun process(items: MutableList<String>,"
+				+ " name: String): Int {\n"
+				+ "        items.add(name)\n"
+				+ "        val sb = StringBuilder()\n"
+				+ "        sb.append(name)\n"
+				+ "        val unknown = createHelper()\n"
+				+ "        unknown.doStuff()\n"
+				+ "        return items.size\n"
+				+ "    }\n"
+				+ "}\n"
+				+ "\n"
+				+ "fun createHelper(): Any = Object()\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers
+				.searchMethodDeclarations("process", project);
+		List<SearchMatch> ktMatches = TestHelpers
+				.filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find process declaration");
+
+		IMember kotlinMethod = (IMember) ktMatches.get(0)
+				.getElement();
+
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCalleeRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		// This must not throw — the mix of resolved + stubs must
+		// be handled gracefully by CallSearchResultCollector
+		MethodWrapper[] callees = roots[0].getCalls(
+				new NullProgressMonitor());
+
+		Set<String> calleeNames = new HashSet<>();
+		for (MethodWrapper callee : callees) {
+			calleeNames.add(callee.getMember().getElementName());
+		}
+		// At minimum, add() and append() should be resolvable
+		assertTrue(calleeNames.contains("add")
+				|| calleeNames.contains("append"),
+				"Should resolve at least add or append. Found: "
+				+ calleeNames);
+	}
+
+	@Test
+	public void testLocateCalleesResolvedCalleeHasDeclaringType()
+			throws CoreException {
+		// Top-level functions resolved via symbol table must have
+		// a non-null declaring type (facade class) to prevent NPE
+		// in jdt.ui's CallSearchResultCollector.getTypeOfElement()
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/decltype");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/decltype/Helpers.kt",
+				"package decltype\n"
+				+ "\n"
+				+ "fun helperA(): Int = 42\n"
+				+ "fun helperB(): String = \"b\"\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/decltype/Caller.kt",
+				"package decltype\n"
+				+ "\n"
+				+ "fun caller(): String {\n"
+				+ "    val x = helperA()\n"
+				+ "    return helperB()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("caller", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find caller declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()
+					&& callee.getElementType()
+							== IJavaElement.METHOD) {
+				assertNotNull(callee.getDeclaringType(),
+						"ResolvedCallee '" + callee.getElementName()
+						+ "' must have non-null declaring type. "
+						+ "Class: "
+						+ callee.getClass().getSimpleName());
+				assertNotNull(callee.getDeclaringType()
+						.getFullyQualifiedName(),
+						"Declaring type FQN must not be null for '"
+						+ callee.getElementName() + "'");
+			}
 		}
 	}
 
@@ -713,6 +1096,14 @@ public class CrossLanguageCallHierarchyTest {
 		assertEquals(0, methodElem.getParameterCount(),
 				"navTestMethod has 0 parameters");
 		assertEquals(IJavaElement.METHOD, methodElem.getElementType());
+		assertNotNull(methodElem.getAncestor(IJavaElement.TYPE),
+				"getAncestor(TYPE) on method should return declaring type");
+		assertEquals(IJavaElement.TYPE,
+				methodElem.getAncestor(IJavaElement.TYPE).getElementType());
+		assertNotNull(methodElem.getAncestor(IJavaElement.COMPILATION_UNIT),
+				"getAncestor(COMPILATION_UNIT) on method should return CU");
+		assertNotNull(methodElem.getAncestor(IJavaElement.JAVA_PROJECT),
+				"getAncestor(JAVA_PROJECT) on method should return project");
 
 		// Test field element
 		List<SearchMatch> fieldMatches = TestHelpers.searchFieldDeclarations(
@@ -722,6 +1113,35 @@ public class CrossLanguageCallHierarchyTest {
 		KotlinElement.KotlinFieldElement fieldElem =
 				(KotlinElement.KotlinFieldElement) ktFields.get(0).getElement();
 		assertEquals(IJavaElement.FIELD, fieldElem.getElementType());
+		assertNotNull(fieldElem.getAncestor(IJavaElement.TYPE),
+				"getAncestor(TYPE) on field should return declaring type");
+		assertEquals(IJavaElement.TYPE,
+				fieldElem.getAncestor(IJavaElement.TYPE).getElementType());
+		assertNotNull(fieldElem.getAncestor(IJavaElement.COMPILATION_UNIT),
+				"getAncestor(COMPILATION_UNIT) on field should return CU");
+		assertNotNull(fieldElem.getAncestor(IJavaElement.JAVA_PROJECT),
+				"getAncestor(JAVA_PROJECT) on field should return project");
+
+		// Verify full ancestor chain consistency for all element types
+		for (KotlinElement elem : new KotlinElement[] {
+				typeElem, methodElem, fieldElem }) {
+			IJavaElement cu = elem.getAncestor(IJavaElement.COMPILATION_UNIT);
+			IJavaElement pfr = elem.getAncestor(
+					IJavaElement.PACKAGE_FRAGMENT_ROOT);
+			IJavaElement pf = elem.getAncestor(IJavaElement.PACKAGE_FRAGMENT);
+			IJavaElement jp = elem.getAncestor(IJavaElement.JAVA_PROJECT);
+			IJavaElement jm = elem.getAncestor(IJavaElement.JAVA_MODEL);
+			assertNotNull(cu, elem.getElementName()
+					+ ": getAncestor(CU) should not be null");
+			assertNotNull(pf, elem.getElementName()
+					+ ": getAncestor(PF) should not be null");
+			assertNotNull(pfr, elem.getElementName()
+					+ ": getAncestor(PFR) should not be null");
+			assertNotNull(jp, elem.getElementName()
+					+ ": getAncestor(JP) should not be null");
+			assertNotNull(jm, elem.getElementName()
+					+ ": getAncestor(JM) should not be null");
+		}
 
 		// Test ISourceRange
 		assertNotNull(typeElem.getSourceRange(), "Should have source range");
@@ -730,6 +1150,81 @@ public class CrossLanguageCallHierarchyTest {
 		assertTrue(typeElem.getSourceRange().getLength() > 0,
 				"Source range length should be positive");
 		assertNotNull(typeElem.getNameRange(), "Should have name range");
+	}
+
+	@Test
+	public void testKotlinTypeHierarchyMethods() throws Exception {
+		// Kotlin class that extends a Java class
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/hierarchy");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/hierarchy/Base.java",
+				"package hierarchy;\n"
+				+ "public class Base {\n"
+				+ "    public void baseMethod() {}\n"
+				+ "}\n");
+		TestHelpers.createFile("/" + PROJECT_NAME + "/src/hierarchy/Sub.kt",
+				"package hierarchy\n"
+				+ "\n"
+				+ "class KotlinSub : Base() {\n"
+				+ "    fun subMethod() {}\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Get the Kotlin type element
+		List<SearchMatch> matches =
+				TestHelpers.searchKotlinTypes("KotlinSub", project);
+		assertTrue(matches.size() >= 1,
+				"Should find KotlinSub type declaration");
+		KotlinElement.KotlinTypeElement kotlinType =
+				(KotlinElement.KotlinTypeElement) matches.get(0)
+						.getElement();
+
+		// newSupertypeHierarchy() must not return null and must not NPE
+		ITypeHierarchy superHierarchy =
+				kotlinType.newSupertypeHierarchy(null);
+		assertNotNull(superHierarchy,
+				"newSupertypeHierarchy must not return null");
+		// getAllSupertypes must not throw
+		IType[] supers = superHierarchy.getAllSupertypes(kotlinType);
+		assertNotNull(supers,
+				"getAllSupertypes must not return null");
+
+		// newTypeHierarchy() must not return null and must not NPE
+		ITypeHierarchy typeHierarchy =
+				kotlinType.newTypeHierarchy((IProgressMonitor) null);
+		assertNotNull(typeHierarchy,
+				"newTypeHierarchy must not return null");
+		IType[] allTypes = typeHierarchy.getAllSubtypes(kotlinType);
+		assertNotNull(allTypes,
+				"getAllSubtypes must not return null");
+
+		// newTypeHierarchy(project) must not NPE
+		ITypeHierarchy projectHierarchy =
+				kotlinType.newTypeHierarchy(project, null);
+		assertNotNull(projectHierarchy,
+				"newTypeHierarchy(project) must not return null");
+
+		// Kotlin method's declaring type hierarchy also must not NPE
+		List<SearchMatch> methodMatches =
+				TestHelpers.searchMethodDeclarations("subMethod", project);
+		List<SearchMatch> ktMethods =
+				TestHelpers.filterKotlinMatches(methodMatches);
+		assertTrue(ktMethods.size() >= 1);
+		KotlinElement.KotlinMethodElement methodElem =
+				(KotlinElement.KotlinMethodElement) ktMethods.get(0)
+						.getElement();
+		IType declaringType = (IType) methodElem.getAncestor(
+				IJavaElement.TYPE);
+		assertNotNull(declaringType,
+				"Method declaring type should not be null");
+		ITypeHierarchy methodTypeHierarchy =
+				declaringType.newSupertypeHierarchy(null);
+		assertNotNull(methodTypeHierarchy,
+				"Declaring type's hierarchy must not return null");
+
+		// resolveType() delegation: resolve a Java type name
+		// in the context of the Kotlin type
+		String[][] resolved = kotlinType.resolveType("Base");
+		// May be null if no Java counterpart exists, but must not NPE
 	}
 
 	// ---- End-to-end call hierarchy via CallHierarchyCore ----
@@ -856,6 +1351,81 @@ public class CrossLanguageCallHierarchyTest {
 										+ "(" + c.getMember().getClass()
 												.getSimpleName() + ")")
 								.collect(Collectors.joining(", ")));
+	}
+
+	@Test
+	public void testIncomingCallsToKotlinMethodFromJava()
+			throws Exception {
+		// Kotlin method called from Java — the reverse direction.
+		// This exercises MatchLocator with KotlinMethodElement as
+		// the search target (MethodPattern.declaringType is our type).
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/e2erev");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/e2erev/KotlinTarget.kt",
+				"package e2erev\n"
+				+ "\n"
+				+ "class KotlinTarget {\n"
+				+ "    fun kotlinMethod(): String {\n"
+				+ "        return \"hello\"\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/e2erev/JavaCaller.java",
+				"package e2erev;\n"
+				+ "public class JavaCaller {\n"
+				+ "    public void callKotlin(KotlinTarget kt) {\n"
+				+ "        kt.kotlinMethod();\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		// Find the Kotlin method via search
+		List<SearchMatch> methodMatches =
+				TestHelpers.searchMethodDeclarations(
+						"kotlinMethod", project);
+		List<SearchMatch> ktMatches =
+				TestHelpers.filterKotlinMatches(methodMatches);
+		assertTrue(ktMatches.size() >= 1,
+				"Should find kotlinMethod declaration");
+		IMember kotlinMethod =
+				(IMember) ktMatches.get(0).getElement();
+
+		// Verify declaring type is resolvable and won't cause
+		// ClassCastException in MatchLocator
+		IType declaringType = kotlinMethod.getDeclaringType();
+		assertNotNull(declaringType,
+				"Kotlin method should have a declaring type");
+
+		// Call hierarchy: incoming calls to the Kotlin method.
+		// CallerMethodWrapper accepts inaccurate matches for
+		// contributed (non-Java) elements since the Java
+		// MatchLocator can't fully resolve Kotlin type bindings.
+		MethodWrapper[] roots = CallHierarchyCore.getDefault()
+				.getCallerRoots(new IMember[] { kotlinMethod });
+		assertEquals(1, roots.length, "Should have one root");
+
+		MethodWrapper[] callers = roots[0].getCalls(
+				new NullProgressMonitor());
+		assertNotNull(callers, "getCalls must not throw");
+
+		boolean foundJavaCaller = false;
+		for (MethodWrapper caller : callers) {
+			IMember member = caller.getMember();
+			if ("callKotlin".equals(member.getElementName())) {
+				foundJavaCaller = true;
+			}
+		}
+		assertTrue(foundJavaCaller,
+				"Should find Java caller via CallHierarchyCore "
+				+ "incoming calls to Kotlin method. Found "
+				+ callers.length + " caller(s): "
+				+ Arrays.stream(callers)
+						.map(c -> c.getMember().getElementName()
+								+ "("
+								+ c.getMember().getClass()
+										.getSimpleName()
+								+ ")")
+						.collect(Collectors.joining(", ")));
 	}
 
 	@Test
@@ -2157,5 +2727,348 @@ public class CrossLanguageCallHierarchyTest {
 						+ "getAge() and setAge() calls. "
 						+ "Total: " + ageRefs.size()
 						+ ", Java: " + ageJavaRefs.size());
+	}
+
+	// ---- Tests for Fix 1: Symbol table fallback (Kotlin receiver) ----
+
+	@Test
+	public void testLocateCalleesResolvesMethodOnKotlinReceiver()
+			throws CoreException {
+		// Two Kotlin files: a service class and a caller that invokes
+		// methods on a parameter of that Kotlin type. Since the type
+		// has no .class file, findType() returns null — the symbol
+		// table fallback must resolve it.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/symfall");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/symfall/KtService.kt",
+				"package symfall\n"
+				+ "\n"
+				+ "class KtService {\n"
+				+ "    fun execute(): String = \"done\"\n"
+				+ "    fun validate(): Boolean = true\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/symfall/Caller.kt",
+				"package symfall\n"
+				+ "\n"
+				+ "fun callService(svc: KtService): String {\n"
+				+ "    svc.validate()\n"
+				+ "    return svc.execute()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("callService", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find callService declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("execute"),
+				"execute() on Kotlin receiver should resolve "
+				+ "via symbol table. Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("validate"),
+				"validate() on Kotlin receiver should resolve "
+				+ "via symbol table. Resolved: " + resolvedNames);
+	}
+
+	// ---- Tests for Fix 2: Local member check (implicit this) ----
+
+	@Test
+	public void testLocateCalleesResolvesImplicitThisSameClass()
+			throws CoreException {
+		// A Kotlin class with methods calling other methods on the
+		// same class via implicit this. The class is pure Kotlin
+		// (no Java supertype), so JDT findType fails — the local
+		// member check in the parse tree must resolve it.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/impllocal");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/impllocal/Worker.kt",
+				"package impllocal\n"
+				+ "\n"
+				+ "class Worker {\n"
+				+ "    fun prepare(): String = \"ready\"\n"
+				+ "    fun cleanup(): Boolean = true\n"
+				+ "    fun run(): String {\n"
+				+ "        prepare()\n"
+				+ "        cleanup()\n"
+				+ "        return \"done\"\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("run", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		// Filter for the one in impllocal package
+		ktDecls = ktDecls.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName()
+								.equals("Worker.kt"))
+				.toList();
+		assertTrue(ktDecls.size() >= 1,
+				"Should find run declaration in Worker.kt");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("prepare"),
+				"prepare() via implicit this should resolve. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("cleanup"),
+				"cleanup() via implicit this should resolve. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	// ---- Tests for Fix 3: Constructor calls via symbol table ----
+
+	@Test
+	public void testLocateCalleesResolvesKotlinConstructor()
+			throws CoreException {
+		// Constructor call to a Kotlin class with no .class file.
+		// The symbol table must resolve it.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/ktctor");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/ktctor/Config.kt",
+				"package ktctor\n"
+				+ "\n"
+				+ "class Config(val name: String)\n"
+				+ "class Options(val verbose: Boolean)\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/ktctor/Factory.kt",
+				"package ktctor\n"
+				+ "\n"
+				+ "fun createConfig(): Config {\n"
+				+ "    val opts = Options(true)\n"
+				+ "    return Config(\"default\")\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("createConfig", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find createConfig declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("Config"),
+				"Config constructor should resolve via symbol "
+				+ "table. Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("Options"),
+				"Options constructor should resolve via symbol "
+				+ "table. Resolved: " + resolvedNames);
+	}
+
+	// ---- Tests for Fix 4: Facade class resolution ----
+
+	@Test
+	public void testLocateCalleesResolvesImportedTopLevelFunction()
+			throws CoreException {
+		// A top-level function in one file called from another.
+		// The symbol table should have the facade class info.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/facade");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/facade/Utils.kt",
+				"package facade\n"
+				+ "\n"
+				+ "fun doFormat(value: String): String = value.trim()\n"
+				+ "fun doValidate(value: String): Boolean ="
+				+ " value.isNotEmpty()\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/facade/Consumer.kt",
+				"package facade\n"
+				+ "\n"
+				+ "fun consume(input: String): String {\n"
+				+ "    doValidate(input)\n"
+				+ "    return doFormat(input)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("consume", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find consume declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("doFormat"),
+				"doFormat() top-level function should resolve. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("doValidate"),
+				"doValidate() top-level function should resolve. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	// ---- Tests for Fix 5: Extension function resolution ----
+
+	@Test
+	public void testLocateCalleesResolvesExtensionFunction()
+			throws CoreException {
+		// Extension function calls like toString(), hashCode() are on
+		// java.lang.Object. But also test that methods resolved via
+		// JDT supertypes still work (e.g., String.length inherited
+		// from CharSequence).
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/extfn");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/extfn/ExtTest.kt",
+				"package extfn\n"
+				+ "\n"
+				+ "fun extTest(text: String): Int {\n"
+				+ "    val hash = text.hashCode()\n"
+				+ "    val upper = text.uppercase()\n"
+				+ "    return text.length\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("extTest", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		assertTrue(ktDecls.size() >= 1,
+				"Should find extTest declaration");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("hashCode"),
+				"hashCode() should resolve via String/Object. "
+				+ "Resolved: " + resolvedNames);
+	}
+
+	// ---- Tests for Fix 6: Property type inference from initializers ----
+
+	@Test
+	public void testLocateCalleesResolvesPropertyInitializerType()
+			throws CoreException {
+		// A class property initialized via StringBuilder() — no type
+		// annotation. Methods on the property should resolve because
+		// initClassScope infers the type from the initializer.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/propinf");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/propinf/Builder.kt",
+				"package propinf\n"
+				+ "\n"
+				+ "class Builder {\n"
+				+ "    val sb = StringBuilder()\n"
+				+ "    val items = ArrayList<String>()\n"
+				+ "\n"
+				+ "    fun build(): String {\n"
+				+ "        sb.append(\"hello\")\n"
+				+ "        sb.append(\" world\")\n"
+				+ "        items.add(\"item\")\n"
+				+ "        return sb.toString()\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchParticipant participant = SearchParticipantRegistry
+				.getParticipant("kt");
+		List<SearchMatch> decls = TestHelpers
+				.searchMethodDeclarations("build", project);
+		List<SearchMatch> ktDecls =
+				TestHelpers.filterKotlinMatches(decls);
+		// Filter for the one in propinf package
+		ktDecls = ktDecls.stream()
+				.filter(m -> m.getResource() != null
+						&& m.getResource().getName()
+								.equals("Builder.kt"))
+				.toList();
+		assertTrue(ktDecls.size() >= 1,
+				"Should find build declaration in Builder.kt");
+		IMember caller = (IMember) ktDecls.get(0).getElement();
+
+		String path = caller.getCompilationUnit().getPath()
+				.toString();
+		SearchMatch[] callees = participant.locateCallees(
+				caller, participant.getDocument(path), null);
+
+		Set<String> resolvedNames = new HashSet<>();
+		for (SearchMatch match : callees) {
+			IMember callee = (IMember) match.getElement();
+			if (callee.exists()) {
+				resolvedNames.add(callee.getElementName());
+			}
+		}
+		assertTrue(resolvedNames.contains("append"),
+				"append() on StringBuilder property should "
+				+ "resolve via initializer type inference. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("add"),
+				"add() on ArrayList property should resolve "
+				+ "via initializer type inference. "
+				+ "Resolved: " + resolvedNames);
+		assertTrue(resolvedNames.contains("toString"),
+				"toString() on StringBuilder should resolve. "
+				+ "Resolved: " + resolvedNames);
 	}
 }

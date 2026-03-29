@@ -110,6 +110,13 @@ public class ImportResolver {
 	}
 
 	/**
+	 * Returns true if the simple name has an explicit (non-star) import.
+	 */
+	public boolean isExplicitImport(String simpleName) {
+		return explicitImports.containsKey(simpleName);
+	}
+
+	/**
 	 * Returns all possible FQN candidates for the given simple name, from
 	 * explicit imports, star imports (including defaults), and same-package
 	 * resolution.
@@ -182,4 +189,21 @@ public class ImportResolver {
 	public List<String> getStarImports() {
 		return Collections.unmodifiableList(starImports);
 	}
+
+	/**
+	 * Returns all star import packages including default Kotlin imports.
+	 * Used for extension function resolution via package enumeration.
+	 */
+	public List<String> getAllStarImportPackages() {
+		List<String> all = new ArrayList<>(starImports.size()
+				+ DEFAULT_IMPORTS.size()
+				+ (packageName != null ? 1 : 0));
+		if (packageName != null) {
+			all.add(packageName);
+		}
+		all.addAll(starImports);
+		all.addAll(DEFAULT_IMPORTS);
+		return Collections.unmodifiableList(all);
+	}
+
 }

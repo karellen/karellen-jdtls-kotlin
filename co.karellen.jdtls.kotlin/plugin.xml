@@ -10,6 +10,7 @@
       <searchParticipant
             class="co.karellen.jdtls.kotlin.search.KotlinSearchParticipant"
             id="co.karellen.jdtls.kotlin.searchParticipant"
-            fileExtensions="kt,kts"/>
+            fileExtensions="kt,kts"
+            languageId="kotlin"/>
    </extension>
 </plugin>
