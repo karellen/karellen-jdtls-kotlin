@@ -21,6 +21,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.ITypeHierarchy;
@@ -222,7 +223,7 @@ public class SubtypeChecker {
 				}
 			}
 		} catch (JavaModelException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					SubtypeChecker.class).warn(
 					"JDT type hierarchy lookup failed", e);
 		}

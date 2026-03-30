@@ -18,12 +18,22 @@ package co.karellen.jdtls.kotlin.search;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+import co.karellen.jdtls.kotlin.parser.KotlinParser;
+
+import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.TerminalNode;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.ISchedulingRule;
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.jdt.core.CompletionRequestor;
@@ -34,9 +44,11 @@ import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.ICompletionRequestor;
 import org.eclipse.jdt.core.IImportContainer;
 import org.eclipse.jdt.core.IImportDeclaration;
+import org.eclipse.jdt.core.IField;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaModel;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IOpenable;
 import org.eclipse.jdt.core.IPackageDeclaration;
 import org.eclipse.jdt.core.IPackageFragment;
@@ -44,6 +56,7 @@ import org.eclipse.jdt.core.IPackageFragmentRoot;
 import org.eclipse.jdt.core.IProblemRequestor;
 import org.eclipse.jdt.core.ISourceRange;
 import org.eclipse.jdt.core.IType;
+import org.eclipse.jdt.core.SourceRange;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.WorkingCopyOwner;
@@ -174,7 +187,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	@CoverageExcludeGenerated
-	private IPackageFragment getPackageFragment() {
+	IPackageFragment getPackageFragment() {
 		IJavaProject project = getJavaProject();
 		if (project == null || file == null) {
 			return null;
@@ -193,7 +206,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 				}
 			}
 		} catch (JavaModelException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinCompilationUnit.class).warn(
 					"Failed to resolve package fragment", e);
 		}
@@ -327,15 +340,15 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		try {
 			IBuffer buf = getBuffer();
 			if (buf != null) {
-				return new org.eclipse.jdt.core.SourceRange(0,
+				return new SourceRange(0,
 						buf.getLength());
 			}
 		} catch (JavaModelException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinCompilationUnit.class).warn(
 					"Failed to get source range", e);
 		}
-		return new org.eclipse.jdt.core.SourceRange(0, 0);
+		return new SourceRange(0, 0);
 	}
 
 	@CoverageExcludeGenerated
@@ -500,7 +513,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public IImportDeclaration createImport(String name, IJavaElement sibling,
 			IProgressMonitor monitor) throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot create import in Kotlin file")));
 	}
 
@@ -509,7 +522,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public IImportDeclaration createImport(String name, IJavaElement sibling,
 			int flags, IProgressMonitor monitor) throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot create import in Kotlin file")));
 	}
 
@@ -518,7 +531,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public IPackageDeclaration createPackageDeclaration(String name,
 			IProgressMonitor monitor) throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot create package declaration in Kotlin file")));
 	}
 
@@ -528,7 +541,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			boolean force, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot create type in Kotlin file")));
 	}
 
@@ -537,7 +550,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public UndoEdit applyTextEdit(TextEdit edit, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot apply text edit to Kotlin file")));
 	}
 
@@ -743,7 +756,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			}
 
 			// Find the terminal node at the offset (single traversal)
-			org.antlr.v4.runtime.tree.ParseTree node =
+			ParseTree node =
 					findTerminalAt(fileModel.getParseTree(), offset);
 			if (node == null) {
 				return null;
@@ -760,7 +773,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	private IJavaElement resolveFromContext(
-			org.antlr.v4.runtime.tree.ParseTree node,
+			ParseTree node,
 			String tokenText, KotlinFileModel fileModel) {
 
 		if (isInImportContext(node)) {
@@ -773,22 +786,29 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 				&& isExpressionPrimary(node)) {
 			return resolveTypeReference(tokenText, fileModel);
 		}
+		// Method call: identifier in a navigation suffix (e.g.,
+		// SecurityConstant.rolesToAuth(...))
+		IJavaElement methodTarget = resolveNavigationTarget(
+				node, tokenText, fileModel);
+		if (methodTarget != null) {
+			return methodTarget;
+		}
 		return null;
 	}
 
-	private org.antlr.v4.runtime.tree.ParseTree findTerminalAt(
-			org.antlr.v4.runtime.tree.ParseTree tree, int offset) {
-		if (tree instanceof org.antlr.v4.runtime.tree.TerminalNode tn) {
-			org.antlr.v4.runtime.Token t = tn.getSymbol();
+	private ParseTree findTerminalAt(
+			ParseTree tree, int offset) {
+		if (tree instanceof TerminalNode tn) {
+			Token t = tn.getSymbol();
 			if (t != null && offset >= t.getStartIndex()
 					&& offset <= t.getStopIndex()) {
 				return tn;
 			}
 			return null;
 		}
-		if (tree instanceof org.antlr.v4.runtime.ParserRuleContext ctx) {
+		if (tree instanceof ParserRuleContext ctx) {
 			for (int i = 0; i < ctx.getChildCount(); i++) {
-				org.antlr.v4.runtime.tree.ParseTree found =
+				ParseTree found =
 						findTerminalAt(ctx.getChild(i), offset);
 				if (found != null) {
 					return found;
@@ -799,8 +819,8 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	private boolean isInImportContext(
-			org.antlr.v4.runtime.tree.ParseTree node) {
-		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+			ParseTree node) {
+		ParseTree parent = node.getParent();
 		while (parent != null) {
 			if (parent instanceof co.karellen.jdtls.kotlin.parser
 					.KotlinParser.ImportHeaderContext) {
@@ -812,8 +832,8 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	private boolean isInTypeContext(
-			org.antlr.v4.runtime.tree.ParseTree node) {
-		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+			ParseTree node) {
+		ParseTree parent = node.getParent();
 		while (parent != null) {
 			if (parent instanceof co.karellen.jdtls.kotlin.parser
 					.KotlinParser.SimpleUserTypeContext) {
@@ -830,14 +850,14 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	private boolean isExpressionPrimary(
-			org.antlr.v4.runtime.tree.ParseTree node) {
-		org.antlr.v4.runtime.tree.ParseTree parent = node.getParent();
+			ParseTree node) {
+		ParseTree parent = node.getParent();
 		while (parent != null) {
 			if (parent instanceof co.karellen.jdtls.kotlin.parser
 					.KotlinParser.PrimaryExpressionContext) {
 				// Check if the grandparent is a postfix expression
 				// with navigation suffixes
-				org.antlr.v4.runtime.tree.ParseTree grandParent =
+				ParseTree grandParent =
 						parent.getParent();
 				if (grandParent instanceof co.karellen.jdtls.kotlin
 						.parser.KotlinParser
@@ -853,10 +873,10 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	}
 
 	private IJavaElement resolveImportTarget(
-			org.antlr.v4.runtime.tree.ParseTree node,
+			ParseTree node,
 			KotlinFileModel fileModel) {
 		// Walk up to ImportHeaderContext
-		org.antlr.v4.runtime.tree.ParseTree current = node;
+		ParseTree current = node;
 		while (current != null
 				&& !(current instanceof co.karellen.jdtls.kotlin
 						.parser.KotlinParser.ImportHeaderContext)) {
@@ -865,17 +885,16 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		if (current == null) {
 			return null;
 		}
-		co.karellen.jdtls.kotlin.parser.KotlinParser.ImportHeaderContext
+		KotlinParser.ImportHeaderContext
 				importCtx = (co.karellen.jdtls.kotlin.parser
 						.KotlinParser.ImportHeaderContext) current;
-		co.karellen.jdtls.kotlin.parser.KotlinParser.IdentifierContext
+		KotlinParser.IdentifierContext
 				identifier = importCtx.identifier();
 		if (identifier == null) {
 			return null;
 		}
 		// Build FQN from the identifier parts
-		java.util.List<co.karellen.jdtls.kotlin.parser.KotlinParser
-				.SimpleIdentifierContext> parts =
+		List<KotlinParser.SimpleIdentifierContext> parts =
 				identifier.simpleIdentifier();
 		if (parts == null || parts.isEmpty()) {
 			return null;
@@ -897,6 +916,78 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		String fqn = importResolver.resolve(simpleName);
 		if (fqn != null) {
 			return findJavaType(fqn);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves a navigation suffix identifier (e.g., the method
+	 * name in {@code Receiver.methodName(...)}) to its target.
+	 * Walks the ANTLR tree to find the receiver, resolves its
+	 * type, then finds the method or field on that type.
+	 */
+	private IJavaElement resolveNavigationTarget(
+			ParseTree node,
+			String memberName, KotlinFileModel fileModel) {
+		// Walk up to find NavigationSuffixContext
+		ParseTree parent = node.getParent();
+		while (parent != null) {
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.NavigationSuffixContext) {
+				break;
+			}
+			if (parent instanceof co.karellen.jdtls.kotlin.parser
+					.KotlinParser.PostfixUnaryExpressionContext) {
+				return null; // past the expression boundary
+			}
+			parent = parent.getParent();
+		}
+		if (parent == null) {
+			return null;
+		}
+		// The NavigationSuffix is a child of PostfixUnarySuffix,
+		// which is a child of PostfixUnaryExpression. The primary
+		// expression (receiver) is the first child.
+		ParseTree suffix = parent;
+		ParseTree pus = suffix.getParent();
+		if (pus == null) {
+			return null;
+		}
+		ParseTree pue = pus.getParent();
+		if (!(pue instanceof co.karellen.jdtls.kotlin.parser
+				.KotlinParser.PostfixUnaryExpressionContext
+				postfixExpr)) {
+			return null;
+		}
+		co.karellen.jdtls.kotlin.parser.KotlinParser
+				.PrimaryExpressionContext primary =
+				postfixExpr.primaryExpression();
+		if (primary == null) {
+			return null;
+		}
+		String receiverName = primary.getText();
+		if (receiverName == null || receiverName.isEmpty()) {
+			return null;
+		}
+		// Resolve the receiver to a Java type
+		IJavaElement receiverElement = resolveTypeReference(
+				receiverName, fileModel);
+		if (!(receiverElement instanceof IType receiverType)) {
+			return null;
+		}
+		// Find the method or field on the receiver type
+		try {
+			for (IMethod m : receiverType.getMethods()) {
+				if (memberName.equals(m.getElementName())) {
+					return m;
+				}
+			}
+			IField f = receiverType.getField(memberName);
+			if (f != null && f.exists()) {
+				return f;
+			}
+		} catch (JavaModelException e) {
+			// Fall through
 		}
 		return null;
 	}
@@ -932,7 +1023,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			String rename, boolean replace, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot copy Kotlin compilation unit")));
 	}
 
@@ -941,7 +1032,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public void delete(boolean force, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot delete Kotlin compilation unit")));
 	}
 
@@ -951,7 +1042,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			String rename, boolean replace, IProgressMonitor monitor)
 			throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot move Kotlin compilation unit")));
 	}
 
@@ -960,7 +1051,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	public void rename(String name, boolean replace,
 			IProgressMonitor monitor) throws JavaModelException {
 		throw new JavaModelException(new CoreException(
-				org.eclipse.core.runtime.Status.error(
+				Status.error(
 						"Cannot rename Kotlin compilation unit")));
 	}
 
@@ -1004,7 +1095,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		try (InputStream is = file.getContents(true)) {
 			return new String(is.readAllBytes(), StandardCharsets.UTF_8);
 		} catch (CoreException | IOException e) {
-			org.eclipse.core.runtime.Platform.getLog(
+			Platform.getLog(
 					KotlinCompilationUnit.class).warn(
 					"Failed to read file contents: "
 							+ file.getFullPath(), e);
