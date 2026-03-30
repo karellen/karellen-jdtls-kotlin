@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: Karellen JDTLS Kotlin Tests
 Bundle-SymbolicName: co.karellen.jdtls.kotlin.tests;singleton:=true
-Bundle-Version: 1.0.1.qualifier
+Bundle-Version: 1.0.1
 Bundle-Vendor: Karellen, Inc.
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: co.karellen.jdtls.kotlin,
