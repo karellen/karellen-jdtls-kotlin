@@ -111,7 +111,7 @@ Full architecture, rationale, and implementation details:
 
 ## Current State
 
-ANTLR4-based Kotlin parser with 7-phase pipeline: declaration extraction, symbol
+ANTLR4-based Kotlin parser with 8-phase pipeline: declaration extraction, symbol
 table, scope-based type resolution, overload resolution, lambda type propagation,
 smart cast narrowing, index emission, and IJavaElement resolution. All cross-language
 LSP features working: find references, go-to-definition, hover, call hierarchy, type
@@ -122,6 +122,8 @@ receivers to Java `IType` elements. File-facade classes (`FileNameKt`) indexed a
 TYPE_DECL; JVM-generated property accessors (`get`/`set`/`is`) indexed as METHOD_DECL.
 Import statements indexed as REF entries. `OrPattern` (REFERENCES + DECLARATIONS
 combined) unwrapped and dispatched to sub-patterns for correct `includeDeclaration`
-handling. 299 integration tests, 87% instruction / 68% branch coverage. Product
+handling. Flow-sensitive assignment-based type narrowing for val/var declarations,
+var reassignments (offset-scoped), property assignments with recursive alias
+propagation. 354 integration tests, 87% instruction / 68% branch coverage. Product
 module produces a self-contained distribution (~48MB tar.gz) with native Eclipse
 launcher (`jdtls`), all jdtls bundles, and the Kotlin plugin.

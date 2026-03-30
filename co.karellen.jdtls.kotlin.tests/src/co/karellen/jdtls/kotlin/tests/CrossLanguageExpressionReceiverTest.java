@@ -2180,6 +2180,183 @@ public class CrossLanguageExpressionReceiverTest {
 	}
 
 	@Test
+	public void testLiteralTypeInference() throws CoreException {
+		// Various Kotlin literals should get correctly typed during
+		// receiver verification for cross-language Java method calls
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/littest");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/littest/TypedReceiver.java",
+				"package littest;\n"
+				+ "public class TypedReceiver {\n"
+				+ "    public static void acceptLong(long v) {}\n"
+				+ "    public static void acceptDouble(double v) {}\n"
+				+ "    public static void acceptFloat(float v) {}\n"
+				+ "    public static void acceptChar(char v) {}\n"
+				+ "    public static void acceptInt(int v) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/littest/Caller.kt",
+				"package littest\n"
+				+ "fun testLiterals() {\n"
+				+ "    val l = 100L\n"
+				+ "    val d = 3.14\n"
+				+ "    val f = 1.5f\n"
+				+ "    val c = 'x'\n"
+				+ "    val h = 0xFF\n"
+				+ "    val b = 0b1010\n"
+				+ "    TypedReceiver.acceptLong(l)\n"
+				+ "    TypedReceiver.acceptDouble(d)\n"
+				+ "    TypedReceiver.acceptFloat(f)\n"
+				+ "    TypedReceiver.acceptChar(c)\n"
+				+ "    TypedReceiver.acceptInt(h)\n"
+				+ "    TypedReceiver.acceptInt(b)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> longRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"littest.TypedReceiver.acceptLong", project);
+		List<SearchMatch> ktLongRefs = TestHelpers
+				.filterKotlinMatches(longRefs);
+		assertTrue(ktLongRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "TypedReceiver.acceptLong(). Got: "
+				+ describeMatches(ktLongRefs));
+
+		List<SearchMatch> intRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"littest.TypedReceiver.acceptInt", project);
+		List<SearchMatch> ktIntRefs = TestHelpers
+				.filterKotlinMatches(intRefs);
+		assertTrue(ktIntRefs.size() >= 2,
+				"Should find at least 2 Kotlin references to "
+				+ "TypedReceiver.acceptInt(). Got: "
+				+ describeMatches(ktIntRefs));
+
+		List<SearchMatch> doubleRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"littest.TypedReceiver.acceptDouble", project);
+		List<SearchMatch> ktDoubleRefs = TestHelpers
+				.filterKotlinMatches(doubleRefs);
+		assertTrue(ktDoubleRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "TypedReceiver.acceptDouble(). Got: "
+				+ describeMatches(ktDoubleRefs));
+
+		List<SearchMatch> floatRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"littest.TypedReceiver.acceptFloat", project);
+		List<SearchMatch> ktFloatRefs = TestHelpers
+				.filterKotlinMatches(floatRefs);
+		assertTrue(ktFloatRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "TypedReceiver.acceptFloat(). Got: "
+				+ describeMatches(ktFloatRefs));
+
+		List<SearchMatch> charRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"littest.TypedReceiver.acceptChar", project);
+		List<SearchMatch> ktCharRefs = TestHelpers
+				.filterKotlinMatches(charRefs);
+		assertTrue(ktCharRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "TypedReceiver.acceptChar(). Got: "
+				+ describeMatches(ktCharRefs));
+	}
+
+	@Test
+	public void testPrimitiveArrayElementTypeResolution()
+			throws CoreException {
+		// Indexing into primitive arrays should resolve element types
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/arraytest");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/arraytest/ArrayConsumer.java",
+				"package arraytest;\n"
+				+ "public class ArrayConsumer {\n"
+				+ "    public static void consumeLong(long v) {}\n"
+				+ "    public static void consumeDouble(double v) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/arraytest/Caller.kt",
+				"package arraytest\n"
+				+ "fun testArrays() {\n"
+				+ "    val longs = longArrayOf(1L, 2L)\n"
+				+ "    val doubles = doubleArrayOf(1.0, 2.0)\n"
+				+ "    ArrayConsumer.consumeLong(longs[0])\n"
+				+ "    ArrayConsumer.consumeLong(longs[1])\n"
+				+ "    ArrayConsumer.consumeDouble(doubles[0])\n"
+				+ "    ArrayConsumer.consumeDouble(doubles[1])\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> longRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"arraytest.ArrayConsumer.consumeLong", project);
+		List<SearchMatch> ktLongRefs = TestHelpers
+				.filterKotlinMatches(longRefs);
+		assertTrue(ktLongRefs.size() >= 2,
+				"Should find at least 2 Kotlin references to "
+				+ "ArrayConsumer.consumeLong(). Got: "
+				+ describeMatches(ktLongRefs));
+
+		List<SearchMatch> doubleRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"arraytest.ArrayConsumer.consumeDouble",
+						project);
+		List<SearchMatch> ktDoubleRefs = TestHelpers
+				.filterKotlinMatches(doubleRefs);
+		assertTrue(ktDoubleRefs.size() >= 2,
+				"Should find at least 2 Kotlin references to "
+				+ "ArrayConsumer.consumeDouble(). Got: "
+				+ describeMatches(ktDoubleRefs));
+	}
+
+	@Test
+	public void testDestructuringInForLoop() throws CoreException {
+		// Destructured for-loop variables should be properly scoped
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/destruct");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/destruct/Printer.java",
+				"package destruct;\n"
+				+ "public class Printer {\n"
+				+ "    public static void printKey(String key) {}\n"
+				+ "    public static void printValue(int value) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/destruct/Caller.kt",
+				"package destruct\n"
+				+ "fun testDestruct() {\n"
+				+ "    val map = mapOf(\"a\" to 1, \"b\" to 2)\n"
+				+ "    for ((key, value) in map) {\n"
+				+ "        Printer.printKey(key)\n"
+				+ "        Printer.printValue(value)\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> keyRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"destruct.Printer.printKey", project);
+		List<SearchMatch> ktKeyRefs = TestHelpers
+				.filterKotlinMatches(keyRefs);
+		assertTrue(ktKeyRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "Printer.printKey(). Got: "
+				+ describeMatches(ktKeyRefs));
+
+		List<SearchMatch> valueRefs = TestHelpers
+				.searchQualifiedMethodReferences(
+						"destruct.Printer.printValue", project);
+		List<SearchMatch> ktValueRefs = TestHelpers
+				.filterKotlinMatches(valueRefs);
+		assertTrue(ktValueRefs.size() >= 1,
+				"Should find at least 1 Kotlin reference to "
+				+ "Printer.printValue(). Got: "
+				+ describeMatches(ktValueRefs));
+	}
+
+	@Test
 	public void testNestedClassMethodScopePushesMultipleScopes()
 			throws CoreException {
 		// Exercises KotlinSearchParticipant:875 while loop —
@@ -2232,6 +2409,276 @@ public class CrossLanguageExpressionReceiverTest {
 		assertTrue(ktRefs.size() >= 4,
 				"Should find 4+ doWork() calls across nested "
 						+ "classes with multi-scope push/pop. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	// ---------------------------------------------------------------
+	// Tests for ExpressionTypeResolver visitor method coverage
+	// ---------------------------------------------------------------
+
+	@Test
+	public void testNullLiteralTypeInference() throws CoreException {
+		// Exercises visitLiteralConstant null literal path and
+		// elvis expression type resolution.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/nulllit");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nulllit/Handler.java",
+				"package nulllit;\n"
+				+ "public class Handler {\n"
+				+ "    public static void handle(String s) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/nulllit/Caller.kt",
+				"package nulllit\n"
+				+ "fun doWork() {\n"
+				+ "    val x: String? = null\n"
+				+ "    val y: String = x ?: \"default\"\n"
+				+ "    Handler.handle(y)\n"
+				+ "    Handler.handle(y)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchMethodReferences(
+						"handle", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertEquals(2, ktRefs.size(),
+				"Should find 2 Handler.handle() calls via "
+						+ "null literal + elvis expression. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testIfExpressionTypeInference() throws CoreException {
+		// Exercises visitIfExpression — type of if/else expression.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/ifexpr");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/ifexpr/Alpha.java",
+				"package ifexpr;\n"
+				+ "public class Alpha {\n"
+				+ "    public void process() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/ifexpr/Beta.java",
+				"package ifexpr;\n"
+				+ "public class Beta {\n"
+				+ "    public void process() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/ifexpr/Caller.kt",
+				"package ifexpr\n"
+				+ "fun doWork(flag: Boolean) {\n"
+				+ "    val a = Alpha()\n"
+				+ "    val b = Beta()\n"
+				+ "    val result = if (flag) a else b\n"
+				+ "    result.process()\n"
+				+ "    result.process()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchQualifiedMethodReferences(
+						"ifexpr.Alpha.process", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		// If-expression resolves to Alpha (first branch); 2 calls
+		assertTrue(ktRefs.size() >= 2,
+				"Should find >= 2 Alpha.process() calls via "
+						+ "if-expression type resolution. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testWhenExpressionTypeInference() throws CoreException {
+		// Exercises visitWhenExpression.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/whenexpr");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/whenexpr/Processor.java",
+				"package whenexpr;\n"
+				+ "public class Processor {\n"
+				+ "    public void run() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/whenexpr/Caller.kt",
+				"package whenexpr\n"
+				+ "fun doWork(code: Int) {\n"
+				+ "    val p = when (code) {\n"
+				+ "        1 -> Processor()\n"
+				+ "        2 -> Processor()\n"
+				+ "        else -> Processor()\n"
+				+ "    }\n"
+				+ "    p.run()\n"
+				+ "    p.run()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchQualifiedMethodReferences(
+						"whenexpr.Processor.run", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertEquals(2, ktRefs.size(),
+				"Should find 2 Processor.run() calls via "
+						+ "when-expression type resolution. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testBooleanOperatorTypeInference()
+			throws CoreException {
+		// Exercises disjunction (||), conjunction (&&), equality (==),
+		// and comparison (>) returning BOOLEAN.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/boolops");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/boolops/Checker.java",
+				"package boolops;\n"
+				+ "public class Checker {\n"
+				+ "    public static void check(boolean b) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/boolops/Caller.kt",
+				"package boolops\n"
+				+ "fun doWork() {\n"
+				+ "    val a = true\n"
+				+ "    val b = false\n"
+				+ "    val or = a || b\n"
+				+ "    val and = a && b\n"
+				+ "    val eq = a == b\n"
+				+ "    val gt = 1 > 0\n"
+				+ "    Checker.check(or)\n"
+				+ "    Checker.check(and)\n"
+				+ "    Checker.check(eq)\n"
+				+ "    Checker.check(gt)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchMethodReferences(
+						"check", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertEquals(4, ktRefs.size(),
+				"Should find 4 Checker.check() calls for "
+						+ "boolean operator type inference. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testCollectionLiteralTypeInference()
+			throws CoreException {
+		// Exercises visitCollectionLiteral — listOf(...), mapOf(...).
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/collit");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/collit/Processor.java",
+				"package collit;\n"
+				+ "public class Processor {\n"
+				+ "    public static void process(Object o) {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME + "/src/collit/Caller.kt",
+				"package collit\n"
+				+ "fun doWork() {\n"
+				+ "    val list = listOf(1, 2, 3)\n"
+				+ "    val map = mapOf(\"a\" to 1, \"b\" to 2)\n"
+				+ "    Processor.process(list)\n"
+				+ "    Processor.process(map)\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchMethodReferences(
+						"process", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertEquals(2, ktRefs.size(),
+				"Should find 2 Processor.process() calls "
+						+ "for collection literal type inference. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testLambdaScopeTypeInference() throws CoreException {
+		// Exercises lambda scope pushing in walkSuffixes — typed
+		// lambda parameters.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/lambdascope");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/lambdascope/Item.java",
+				"package lambdascope;\n"
+				+ "public class Item {\n"
+				+ "    public void activate() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/lambdascope/Caller.kt",
+				"package lambdascope\n"
+				+ "fun doWork() {\n"
+				+ "    val items = listOf(Item(), Item())\n"
+				+ "    items.forEach { item ->\n"
+				+ "        item.activate()\n"
+				+ "        item.activate()\n"
+				+ "    }\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchQualifiedMethodReferences(
+						"lambdascope.Item.activate", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertEquals(2, ktRefs.size(),
+				"Should find 2 Item.activate() calls via "
+						+ "lambda scope type inference. Got: "
+						+ describeMatches(ktRefs));
+	}
+
+	@Test
+	public void testQualifiedPropertyBindingInWalkSuffixes()
+			throws CoreException {
+		// Exercises the qualified binding check in walkSuffixes —
+		// a property assignment narrowing where the narrowed type's
+		// method is called through the property chain.
+		TestHelpers.createFolder("/" + PROJECT_NAME + "/src/qualprop");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/qualprop/Processor.java",
+				"package qualprop;\n"
+				+ "public interface Processor {\n"
+				+ "    void run();\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/qualprop/FastProcessor.java",
+				"package qualprop;\n"
+				+ "public class FastProcessor implements Processor {\n"
+				+ "    public void run() {}\n"
+				+ "    public void turbo() {}\n"
+				+ "}\n");
+		TestHelpers.createFile(
+				"/" + PROJECT_NAME
+				+ "/src/qualprop/Caller.kt",
+				"package qualprop\n"
+				+ "class Holder {\n"
+				+ "    var processor: Processor = FastProcessor()\n"
+				+ "}\n"
+				+ "fun doWork() {\n"
+				+ "    val h = Holder()\n"
+				+ "    h.processor = FastProcessor()\n"
+				+ "    h.processor.turbo()\n"
+				+ "    h.processor.turbo()\n"
+				+ "}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> refs =
+				TestHelpers.searchQualifiedMethodReferences(
+						"qualprop.FastProcessor.turbo", project);
+		List<SearchMatch> ktRefs = TestHelpers.filterKotlinMatches(
+				refs);
+		assertTrue(ktRefs.size() >= 2,
+				"Should find >= 2 FastProcessor.turbo() calls "
+						+ "via qualified property binding in "
+						+ "walkSuffixes. Got: "
 						+ describeMatches(ktRefs));
 	}
 }

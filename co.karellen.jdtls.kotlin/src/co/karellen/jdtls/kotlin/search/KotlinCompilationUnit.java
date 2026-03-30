@@ -263,7 +263,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public String getAttachedJavadoc(IProgressMonitor monitor) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -354,7 +354,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public ISourceRange getNameRange() {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	// ---- IParent ----
@@ -409,7 +409,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public WorkingCopyOwner getOwner() {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -459,7 +459,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public ICompilationUnit findWorkingCopy(WorkingCopyOwner owner) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@Override
@@ -470,13 +470,13 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public IImportDeclaration getImport(String name) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
 	@Override
 	public IImportContainer getImportContainer() {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -488,7 +488,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public IPackageDeclaration getPackageDeclaration(String name) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -500,7 +500,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public IType getType(String name) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@Override
@@ -554,7 +554,6 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 						"Cannot apply text edit to Kotlin file")));
 	}
 
-	@CoverageExcludeGenerated
 	@Override
 	public CompilationUnit reconcile(int astLevel,
 			boolean forceProblemDetection, WorkingCopyOwner owner,
@@ -562,7 +561,6 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		return null;
 	}
 
-	@CoverageExcludeGenerated
 	@Override
 	public CompilationUnit reconcile(int astLevel,
 			boolean forceProblemDetection,
@@ -571,7 +569,6 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		return null;
 	}
 
-	@CoverageExcludeGenerated
 	@Override
 	public CompilationUnit reconcile(int astLevel, int reconcileFlags,
 			WorkingCopyOwner owner, IProgressMonitor monitor) {
@@ -581,7 +578,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public IJavaElement[] findElements(IJavaElement element) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -607,7 +604,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 	@CoverageExcludeGenerated
 	@Override
 	public IJavaElement findSharedWorkingCopy(IBufferFactory bufferFactory) {
-		return null;
+		throw new UnsupportedOperationException();
 	}
 
 	@CoverageExcludeGenerated
@@ -822,8 +819,7 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			ParseTree node) {
 		ParseTree parent = node.getParent();
 		while (parent != null) {
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.ImportHeaderContext) {
+			if (parent instanceof KotlinParser.ImportHeaderContext) {
 				return true;
 			}
 			parent = parent.getParent();
@@ -835,13 +831,11 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			ParseTree node) {
 		ParseTree parent = node.getParent();
 		while (parent != null) {
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.SimpleUserTypeContext) {
+			if (parent instanceof KotlinParser.SimpleUserTypeContext) {
 				return true;
 			}
 			// Don't walk past expression boundaries
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.PostfixUnaryExpressionContext) {
+			if (parent instanceof KotlinParser.PostfixUnaryExpressionContext) {
 				return false;
 			}
 			parent = parent.getParent();
@@ -853,14 +847,12 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			ParseTree node) {
 		ParseTree parent = node.getParent();
 		while (parent != null) {
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.PrimaryExpressionContext) {
+			if (parent instanceof KotlinParser.PrimaryExpressionContext) {
 				// Check if the grandparent is a postfix expression
 				// with navigation suffixes
 				ParseTree grandParent =
 						parent.getParent();
-				if (grandParent instanceof co.karellen.jdtls.kotlin
-						.parser.KotlinParser
+				if (grandParent instanceof KotlinParser
 						.PostfixUnaryExpressionContext pue) {
 					return pue.postfixUnarySuffix() != null
 							&& !pue.postfixUnarySuffix().isEmpty();
@@ -878,16 +870,14 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		// Walk up to ImportHeaderContext
 		ParseTree current = node;
 		while (current != null
-				&& !(current instanceof co.karellen.jdtls.kotlin
-						.parser.KotlinParser.ImportHeaderContext)) {
+				&& !(current instanceof KotlinParser.ImportHeaderContext)) {
 			current = current.getParent();
 		}
 		if (current == null) {
 			return null;
 		}
-		KotlinParser.ImportHeaderContext
-				importCtx = (co.karellen.jdtls.kotlin.parser
-						.KotlinParser.ImportHeaderContext) current;
+		KotlinParser.ImportHeaderContext importCtx =
+				(KotlinParser.ImportHeaderContext) current;
 		KotlinParser.IdentifierContext
 				identifier = importCtx.identifier();
 		if (identifier == null) {
@@ -932,12 +922,10 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 		// Walk up to find NavigationSuffixContext
 		ParseTree parent = node.getParent();
 		while (parent != null) {
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.NavigationSuffixContext) {
+			if (parent instanceof KotlinParser.NavigationSuffixContext) {
 				break;
 			}
-			if (parent instanceof co.karellen.jdtls.kotlin.parser
-					.KotlinParser.PostfixUnaryExpressionContext) {
+			if (parent instanceof KotlinParser.PostfixUnaryExpressionContext) {
 				return null; // past the expression boundary
 			}
 			parent = parent.getParent();
@@ -954,13 +942,11 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 			return null;
 		}
 		ParseTree pue = pus.getParent();
-		if (!(pue instanceof co.karellen.jdtls.kotlin.parser
-				.KotlinParser.PostfixUnaryExpressionContext
-				postfixExpr)) {
+		if (!(pue instanceof KotlinParser
+				.PostfixUnaryExpressionContext postfixExpr)) {
 			return null;
 		}
-		co.karellen.jdtls.kotlin.parser.KotlinParser
-				.PrimaryExpressionContext primary =
+		KotlinParser.PrimaryExpressionContext primary =
 				postfixExpr.primaryExpression();
 		if (primary == null) {
 			return null;
