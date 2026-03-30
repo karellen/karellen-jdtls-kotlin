@@ -1275,6 +1275,119 @@ public class CrossLanguageHandlerTest {
 		return toLineColumn(doc, range.getOffset());
 	}
 
+	// ---- jdtls handler compatibility: methods called at runtime ----
+
+	/**
+	 * CallHierarchyHandler.getCallHierarchyElement() calls
+	 * {@code unit.reconcile(NO_AST, false, null, monitor)} on
+	 * KotlinCompilationUnit. Must not throw.
+	 */
+	@Test
+	public void testReconcileOnKotlinCompilationUnitDoesNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+				"HandlerTestType", project);
+		assertTrue(matches.size() >= 1);
+
+		SearchMatch match = matches.get(0);
+		IJavaElement element = (IJavaElement) match.getElement();
+		ICompilationUnit cu = (ICompilationUnit) element.getAncestor(
+				IJavaElement.COMPILATION_UNIT);
+		assertTrue(cu instanceof KotlinCompilationUnit);
+
+		// Simulate CallHierarchyHandler.reconcile():
+		// unit.reconcile(ICompilationUnit.NO_AST, false, null, null)
+		cu.reconcile(ICompilationUnit.NO_AST, false, null, null);
+		// Also test the 3-arg overload used by publishDiagnostics
+		cu.reconcile(ICompilationUnit.NO_AST, false, false, null, null);
+	}
+
+	/**
+	 * ReferencesHandler.getBuilderName() calls
+	 * {@code declaringType.getAnnotation("Builder")} on the declaring
+	 * type of an IField. Must not throw.
+	 */
+	@Test
+	public void testGetAnnotationOnKotlinTypeDoesNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+				"HandlerTestType", project);
+		assertTrue(matches.size() >= 1);
+
+		SearchMatch match = matches.get(0);
+		IType type = (IType) match.getElement();
+		assertTrue(type instanceof KotlinElement.KotlinTypeElement);
+
+		// Simulate ReferencesHandler.getBuilderName():
+		// declaringType.getAnnotation("Builder")
+		var annotation = type.getAnnotation("Builder");
+		assertFalse(annotation != null && annotation.exists(),
+				"Kotlin type should not have Builder annotation");
+	}
+
+	/**
+	 * ReferencesHandler processes IField elements and calls
+	 * getAnnotation on the field's declaring type. Exercises the full
+	 * chain: find field -> get declaring type -> getAnnotation.
+	 */
+	@Test
+	public void testGetAnnotationOnFieldDeclaringTypeDoesNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchFieldDeclarations(
+				"handlerTestField", project);
+		List<SearchMatch> ktMatches = filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1);
+
+		SearchMatch match = ktMatches.get(0);
+		IField field = (IField) match.getElement();
+		assertTrue(field instanceof KotlinElement.KotlinFieldElement);
+
+		IType declaringType = field.getDeclaringType();
+		assertNotNull(declaringType,
+				"Field should have a declaring type");
+		assertTrue(declaringType instanceof KotlinElement.KotlinTypeElement);
+
+		// Simulate ReferencesHandler.getBuilderName():
+		var annotation = declaringType.getAnnotation("Builder");
+		assertFalse(annotation != null && annotation.exists());
+		annotation = declaringType.getAnnotation("lombok.Builder");
+		assertFalse(annotation != null && annotation.exists());
+	}
+
+	/**
+	 * JDTUtils.isDeprecated() may call getAnnotations() on any
+	 * KotlinElement. Must return empty array, not throw.
+	 */
+	@Test
+	public void testGetAnnotationsOnKotlinMethodDoesNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations(
+				"handlerTestMethod", project);
+		List<SearchMatch> ktMatches = filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1);
+
+		SearchMatch match = ktMatches.get(0);
+		IMethod method = (IMethod) match.getElement();
+		assertTrue(method instanceof KotlinElement.KotlinMethodElement);
+
+		// Must not throw
+		var annotations = method.getAnnotations();
+		assertNotNull(annotations);
+		assertEquals(0, annotations.length);
+
+		// getAnnotation by name must not throw either
+		var annotation = method.getAnnotation("Override");
+		// annotation may be null or non-existent, but must not throw
+	}
+
 	/**
 	 * Replicates JsonRpcHelpers.toLine(IDocument, offset): converts a
 	 * character offset to a 0-based [line, column] pair.

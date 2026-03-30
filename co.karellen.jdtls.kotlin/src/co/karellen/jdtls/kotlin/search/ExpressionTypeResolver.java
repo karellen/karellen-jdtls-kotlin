@@ -50,11 +50,6 @@ public class ExpressionTypeResolver
 	private final IJavaProject javaProject;
 
 	public ExpressionTypeResolver(ScopeChain scopeChain,
-			SymbolTable symbolTable, ImportResolver importResolver) {
-		this(scopeChain, symbolTable, importResolver, null);
-	}
-
-	public ExpressionTypeResolver(ScopeChain scopeChain,
 			SymbolTable symbolTable, ImportResolver importResolver,
 			SubtypeChecker subtypeChecker) {
 		this(scopeChain, symbolTable, importResolver,
@@ -386,6 +381,24 @@ public class ExpressionTypeResolver
 				if (navSuffix.simpleIdentifier() != null) {
 					String memberName = navSuffix.simpleIdentifier()
 							.getText();
+
+					// Check for property assignment narrowing via
+					// qualified scope binding (e.g., "holder.processor")
+					if (i == 0) {
+						String primaryName = getPrimaryName(ctx);
+						if (primaryName != null) {
+							KotlinType qualifiedType =
+									scopeChain.lookupBinding(
+											primaryName + "."
+													+ memberName);
+							if (qualifiedType != null) {
+								type = qualifiedType;
+								i++;
+								continue;
+							}
+						}
+					}
+
 					if (i + 1 < limit
 							&& suffixes.get(i + 1)
 									.callSuffix() != null) {

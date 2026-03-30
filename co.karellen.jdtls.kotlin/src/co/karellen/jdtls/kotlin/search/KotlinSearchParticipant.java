@@ -1080,6 +1080,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		// Smart cast scopes for the current enclosing function
 		List<SmartCastExtractor.SmartCastScope> smartCastScopes =
 				Collections.emptyList();
+		List<LocalVariableExtractor.AssignmentNarrowingScope>
+				assignmentScopes = Collections.emptyList();
 		// Track depth after function scope setup (before lambda push)
 		int functionScopeDepth = scopesBefore;
 
@@ -1120,16 +1122,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 								enclosingType, packageName);
 					}
 					if (enclosingDecl instanceof KotlinDeclaration.MethodDeclaration md) {
-						scopeChain.initFunctionScope(md);
-						List<LocalVariableExtractor.LocalVariable> locals =
-								LocalVariableExtractor.extract(
-										fileModel.getParseTree(),
-										md.getStartOffset(),
-										md.getEndOffset());
-						if (!locals.isEmpty()) {
-							scopeChain.initLocalVariableScope(locals,
-									exprResolver);
-						}
+						assignmentScopes = initMethodScopes(md,
+								scopeChain, exprResolver, fileModel);
 						lambdaScopes = LambdaScopeExtractor.extract(
 								fileModel.getParseTree(),
 								md.getStartOffset(),
@@ -1141,6 +1135,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					} else {
 						lambdaScopes = Collections.emptyList();
 						smartCastScopes = Collections.emptyList();
+						assignmentScopes = Collections.emptyList();
 					}
 					functionScopeDepth = scopeChain.depth();
 					lastEnclosingDecl = enclosingDecl;
@@ -1166,6 +1161,11 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					pushSmartCastBindings(ref.getOffset(),
 							smartCastScopes, scopeChain,
 							importResolver);
+				}
+
+				if (!assignmentScopes.isEmpty()) {
+					pushAssignmentNarrowings(ref.getOffset(),
+							assignmentScopes, scopeChain);
 				}
 
 				// Verify receiver type if we have declaring type info
@@ -1303,6 +1303,75 @@ public class KotlinSearchParticipant extends SearchParticipant {
 	}
 
 	/**
+	 * Initializes function scope, local variable scope, and builds
+	 * assignment narrowing scopes for a method declaration. Pushes
+	 * the function and local variable scopes onto the scope chain and
+	 * returns the pre-resolved assignment narrowing scopes.
+	 */
+	private List<LocalVariableExtractor.AssignmentNarrowingScope>
+			initMethodScopes(KotlinDeclaration.MethodDeclaration md,
+					ScopeChain scopeChain,
+					ExpressionTypeResolver exprResolver,
+					KotlinFileModel fileModel) {
+		scopeChain.initFunctionScope(md);
+		LocalVariableExtractor.ExtractionResult extraction =
+				LocalVariableExtractor.extract(
+						fileModel.getParseTree(),
+						md.getStartOffset(),
+						md.getEndOffset());
+		List<LocalVariableExtractor.LocalVariable> locals =
+				extraction.locals();
+		if (!locals.isEmpty()) {
+			scopeChain.initLocalVariableScope(locals, exprResolver);
+		}
+		List<LocalVariableExtractor.Reassignment> reassignments =
+				extraction.reassignments();
+		if (reassignments.isEmpty()) {
+			return Collections.emptyList();
+		}
+		Set<String> varNames = new HashSet<>();
+		for (LocalVariableExtractor.LocalVariable l : locals) {
+			if (!l.isVal()) {
+				varNames.add(l.name());
+			}
+		}
+		return LocalVariableExtractor.buildAssignmentScopes(
+				reassignments, varNames, md.getEndOffset(),
+				exprResolver);
+	}
+
+	/**
+	 * Pushes assignment-narrowed type bindings into the scope chain if
+	 * the given offset falls inside an assignment narrowing scope. Uses
+	 * pre-resolved RHS types from scope building and narrows from the
+	 * declared type.
+	 */
+	private void pushAssignmentNarrowings(int offset,
+			List<LocalVariableExtractor.AssignmentNarrowingScope> scopes,
+			ScopeChain scopeChain) {
+		List<LocalVariableExtractor.AssignmentNarrowingScope> enclosing =
+				ScopeRange.findAllEnclosing(scopes, offset);
+		if (enclosing.isEmpty()) {
+			return;
+		}
+		scopeChain.pushScope();
+		for (LocalVariableExtractor.AssignmentNarrowingScope scope
+				: enclosing) {
+			KotlinType inferred = scope.resolvedType();
+			if (inferred != null && !inferred.isUnknown()) {
+				KotlinType existing = scopeChain.resolveType(
+						scope.variableName());
+				KotlinType declaredType =
+						existing.getDeclaredType() != null
+								? existing.getDeclaredType()
+								: existing;
+				scopeChain.addBinding(scope.variableName(),
+						inferred.narrowFrom(declaredType));
+			}
+		}
+	}
+
+	/**
 	 * Extracts the declaring type's simple name from a search pattern,
 	 * if available. Returns {@code null} if the pattern has no declaring
 	 * type constraint.
@@ -1397,39 +1466,37 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			return true; // conservative: allow
 		}
 
-		// Check if the resolved type matches the declaring type
-		String resolvedSimple = resolvedType.getSimpleName();
-		if (resolvedSimple != null
-				&& resolvedSimple.equalsIgnoreCase(declaringSimpleName)) {
-			return true;
-		}
-
-		// Check against Java FQN equivalence
-		String resolvedFQN = resolvedType.getFQN();
-		String javaFQN = resolvedType.getJavaFQN();
-
-		// Try to match via FQN (declaring type might be a package-qualified name)
-		if (resolvedFQN.endsWith("." + declaringSimpleName)
-				|| javaFQN.endsWith("." + declaringSimpleName)) {
-			return true;
-		}
-
-		// Check supertype hierarchy — the receiver could be a subtype
-		// of the declaring type
 		List<String> candidates = importResolver
 				.resolveAllCandidates(declaringSimpleName);
-		for (String candidateFQN : candidates) {
-			KotlinType declaringType;
-			int lastDot = candidateFQN.lastIndexOf('.');
-			if (lastDot >= 0) {
-				declaringType = new KotlinType(
-						candidateFQN.substring(0, lastDot),
-						candidateFQN.substring(lastDot + 1));
-			} else {
-				declaringType = new KotlinType(null, candidateFQN);
-			}
-			if (subtypeChecker.isSubtype(resolvedType, declaringType)) {
+		for (KotlinType type : resolvedType.allTypes()) {
+			String resolvedSimple = type.getSimpleName();
+			if (resolvedSimple != null
+					&& resolvedSimple.equalsIgnoreCase(
+							declaringSimpleName)) {
 				return true;
+			}
+
+			String resolvedFQN = type.getFQN();
+			String javaFQN = type.getJavaFQN();
+
+			if (resolvedFQN.endsWith("." + declaringSimpleName)
+					|| javaFQN.endsWith("." + declaringSimpleName)) {
+				return true;
+			}
+
+			for (String candidateFQN : candidates) {
+				KotlinType declaringType;
+				int lastDot = candidateFQN.lastIndexOf('.');
+				if (lastDot >= 0) {
+					declaringType = new KotlinType(
+							candidateFQN.substring(0, lastDot),
+							candidateFQN.substring(lastDot + 1));
+				} else {
+					declaringType = new KotlinType(null, candidateFQN);
+				}
+				if (subtypeChecker.isSubtype(type, declaringType)) {
+					return true;
+				}
 			}
 		}
 
@@ -1461,19 +1528,47 @@ public class KotlinSearchParticipant extends SearchParticipant {
 			return true; // conservative: allow
 		}
 
-		// Check if the resolved type has the field in our SymbolTable
-		String fqn = resolvedType.getFQN();
-		if (symbolTable.lookupField(fqn, fieldName) != null) {
-			return true;
-		}
-		// Also check with Java FQN mapping
-		String javaFQN = resolvedType.getJavaFQN();
-		if (!javaFQN.equals(fqn)
-				&& symbolTable.lookupField(javaFQN, fieldName) != null) {
-			return true;
+		boolean anyTypeFound = false;
+		for (KotlinType type : resolvedType.allTypes()) {
+			Boolean result = typeHasField(type, fieldName,
+					receiverName, symbolTable, javaProject,
+					hierarchyCache);
+			if (result == null) {
+				continue; // type not found
+			}
+			anyTypeFound = true;
+			if (result) {
+				return true; // field found on this type
+			}
 		}
 
-		// Fall back to JDT IType for Java types not in our SymbolTable
+		// If at least one type was found but none had the field,
+		// filter out. If no type was found at all, conservative allow.
+		return !anyTypeFound;
+	}
+
+	/**
+	 * Checks whether a type has the given field.
+	 *
+	 * @return {@link Boolean#TRUE} if the field exists,
+	 *         {@link Boolean#FALSE} if the type was found but the
+	 *         field doesn't exist, {@code null} if the type itself
+	 *         couldn't be found
+	 */
+	private Boolean typeHasField(KotlinType type, String fieldName,
+			String receiverName, SymbolTable symbolTable,
+			IJavaProject javaProject,
+			Map<String, ITypeHierarchy> hierarchyCache) {
+		String fqn = type.getFQN();
+		if (symbolTable.lookupField(fqn, fieldName) != null) {
+			return Boolean.TRUE;
+		}
+		String javaFQN = type.getJavaFQN();
+		if (!javaFQN.equals(fqn)
+				&& symbolTable.lookupField(javaFQN, fieldName) != null) {
+			return Boolean.TRUE;
+		}
+
 		if (javaProject != null) {
 			try {
 				IType jdtType = javaProject.findType(javaFQN);
@@ -1482,9 +1577,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 				}
 				if (jdtType != null) {
 					if (jdtType.getField(fieldName).exists()) {
-						return true;
+						return Boolean.TRUE;
 					}
-					// Check supertypes — the field might be inherited
 					final IType hierType = jdtType;
 					ITypeHierarchy hierarchy = hierarchyCache
 							.computeIfAbsent(hierType
@@ -1494,8 +1588,8 @@ public class KotlinSearchParticipant extends SearchParticipant {
 									return hierType
 											.newSupertypeHierarchy(null);
 								} catch (JavaModelException e) {
-									org.eclipse.core.runtime.Platform
-											.getLog(KotlinSearchParticipant.class)
+									Platform.getLog(
+											KotlinSearchParticipant.class)
 											.warn("JDT supertype hierarchy "
 													+ "failed", e);
 									return null;
@@ -1505,12 +1599,12 @@ public class KotlinSearchParticipant extends SearchParticipant {
 						for (IType superType : hierarchy
 								.getAllSupertypes(hierType)) {
 							if (superType.getField(fieldName).exists()) {
-								return true;
+								return Boolean.TRUE;
 							}
 						}
 					}
-					// JDT type exists but doesn't have the field
-					return false;
+					// Type found but field doesn't exist
+					return Boolean.FALSE;
 				}
 			} catch (Exception e) {
 				Platform.getLog(
@@ -1518,12 +1612,12 @@ public class KotlinSearchParticipant extends SearchParticipant {
 						"JDT field lookup failed for receiver '"
 								+ receiverName + "' field '"
 								+ fieldName + "'", e);
-				return true;
+				return null; // error — treat as not found
 			}
 		}
 
-		// Type not found in SymbolTable or JDT — conservative allow
-		return true;
+		// Type not found in SymbolTable or JDT
+		return null;
 	}
 
 	private EnclosingContext findEnclosingDeclarationAndType(
@@ -1877,19 +1971,14 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					packageName, exprResolver,
 					fileModel.getParseTree());
 		}
+		List<LocalVariableExtractor.AssignmentNarrowingScope>
+				calleeAssignmentScopes = Collections.emptyList();
 		if (callerDecl instanceof
 				KotlinDeclaration.MethodDeclaration md) {
-			scopeChain.initFunctionScope(md);
-			List<LocalVariableExtractor.LocalVariable> locals =
-					LocalVariableExtractor.extract(
-							fileModel.getParseTree(),
-							md.getStartOffset(),
-							md.getEndOffset());
-			if (!locals.isEmpty()) {
-				scopeChain.initLocalVariableScope(locals,
-						exprResolver);
-			}
+			calleeAssignmentScopes = initMethodScopes(md,
+					scopeChain, exprResolver, fileModel);
 		}
+		int calleeScopeDepth = scopeChain.depth();
 
 		IJavaProject javaProject = caller.getJavaProject();
 
@@ -1897,6 +1986,10 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		int resolved = 0;
 		List<String> stubs = new ArrayList<>();
 		for (KotlinCalleeFinder.CalleeMatch callee : callees) {
+			if (!calleeAssignmentScopes.isEmpty()) {
+				pushAssignmentNarrowings(callee.getOffset(),
+						calleeAssignmentScopes, scopeChain);
+			}
 			IJavaElement element = resolveCallee(callee,
 					importResolver, javaProject, fileModel,
 					scopeChain, exprResolver, enclosing);
@@ -1919,6 +2012,10 @@ public class KotlinSearchParticipant extends SearchParticipant {
 					SearchMatch.A_ACCURATE,
 					callee.getOffset(), callee.getLength(),
 					this, resource));
+			// Pop assignment narrowing scope if pushed
+			while (scopeChain.depth() > calleeScopeDepth) {
+				scopeChain.popScope();
+			}
 		}
 		if (!stubs.isEmpty()) {
 			Platform.getLog(

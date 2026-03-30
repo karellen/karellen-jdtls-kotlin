@@ -88,12 +88,9 @@ public class ScopeChain {
 			return KotlinType.UNKNOWN;
 		}
 
-		// Walk scopes from innermost to outermost
-		for (Map<String, KotlinType> scope : scopes) {
-			KotlinType type = scope.get(name);
-			if (type != null) {
-				return type;
-			}
+		KotlinType bound = lookupBinding(name);
+		if (bound != null) {
+			return bound;
 		}
 
 		// Try KotlinType.resolve which handles auto-imports
@@ -121,6 +118,28 @@ public class ScopeChain {
 		}
 
 		return KotlinType.UNKNOWN;
+	}
+
+	/**
+	 * Looks up a binding by name in the scope stack only, without
+	 * falling back to import resolution or symbol table. Used for
+	 * qualified property bindings (e.g., {@code "holder.processor"})
+	 * that should only match explicit scope entries.
+	 *
+	 * @param name the binding key to look up
+	 * @return the bound type, or {@code null} if not found
+	 */
+	public KotlinType lookupBinding(String name) {
+		if (name == null) {
+			return null;
+		}
+		for (Map<String, KotlinType> scope : scopes) {
+			KotlinType type = scope.get(name);
+			if (type != null) {
+				return type;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -386,7 +405,20 @@ public class ScopeChain {
 		for (LocalVariableExtractor.LocalVariable local : locals) {
 			String typeName = local.typeName();
 			if (typeName != null) {
-				addBinding(local.name(), resolveTypeName(typeName));
+				KotlinType declaredType = resolveTypeName(typeName);
+				if (exprResolver != null
+						&& local.initializerCtx() != null) {
+					KotlinType inferred =
+							exprResolver.resolve(local.initializerCtx());
+					if (!inferred.isUnknown()) {
+						addBinding(local.name(),
+								inferred.narrowFrom(declaredType));
+					} else {
+						addBinding(local.name(), declaredType);
+					}
+				} else {
+					addBinding(local.name(), declaredType);
+				}
 			} else if (exprResolver != null
 					&& local.initializerCtx() != null) {
 				KotlinType inferred =
@@ -396,16 +428,6 @@ public class ScopeChain {
 				addBinding(local.name(), KotlinType.UNKNOWN);
 			}
 		}
-	}
-
-	/**
-	 * Initializes a local variable scope without initializer inference.
-	 *
-	 * @param locals the local variable declarations
-	 */
-	public void initLocalVariableScope(
-			List<LocalVariableExtractor.LocalVariable> locals) {
-		initLocalVariableScope(locals, null);
 	}
 
 	/**

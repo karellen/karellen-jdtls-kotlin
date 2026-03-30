@@ -16,6 +16,7 @@
 package co.karellen.jdtls.kotlin.search;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,6 +30,7 @@ import org.eclipse.jdt.core.CompletionRequestor;
 import org.eclipse.jdt.core.Flags;
 import org.eclipse.jdt.core.IAnnotation;
 import org.eclipse.jdt.core.IClassFile;
+import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.ICompletionRequestor;
 import org.eclipse.jdt.core.IField;
 import org.eclipse.jdt.core.IInitializer;
@@ -48,6 +50,7 @@ import org.eclipse.jdt.core.ITypeHierarchy;
 import org.eclipse.jdt.core.ITypeHierarchyChangedListener;
 import org.eclipse.jdt.core.ITypeParameter;
 import org.eclipse.jdt.core.ITypeRoot;
+import org.eclipse.jdt.core.IWorkingCopy;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.Signature;
 import org.eclipse.jdt.core.SourceRange;
@@ -728,26 +731,26 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public IField getField(String name) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public IMethod getMethod(String name,
 				String[] parameterTypeSignatures) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public IType getType(String name) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public IInitializer getInitializer(int occurrenceCount) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -782,7 +785,7 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public IMethod[] findMethods(IMethod method) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -823,7 +826,7 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public ITypeParameter getTypeParameter(String name) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -865,7 +868,7 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public IField getRecordComponent(String name) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -878,7 +881,7 @@ public abstract class KotlinElement implements IMember {
 		@Override
 		public ITypeHierarchy loadTypeHierachy(InputStream input,
 				IProgressMonitor monitor) throws JavaModelException {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@Override
@@ -893,7 +896,7 @@ public abstract class KotlinElement implements IMember {
 
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
-				org.eclipse.jdt.core.ICompilationUnit[] workingCopies,
+				ICompilationUnit[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
@@ -906,7 +909,7 @@ public abstract class KotlinElement implements IMember {
 		@SuppressWarnings("deprecation")
 		@Override
 		public ITypeHierarchy newSupertypeHierarchy(
-				org.eclipse.jdt.core.IWorkingCopy[] workingCopies,
+				IWorkingCopy[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
@@ -961,7 +964,7 @@ public abstract class KotlinElement implements IMember {
 
 		@Override
 		public ITypeHierarchy newTypeHierarchy(
-				org.eclipse.jdt.core.ICompilationUnit[] workingCopies,
+				ICompilationUnit[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
@@ -974,7 +977,7 @@ public abstract class KotlinElement implements IMember {
 		@SuppressWarnings("deprecation")
 		@Override
 		public ITypeHierarchy newTypeHierarchy(
-				org.eclipse.jdt.core.IWorkingCopy[] workingCopies,
+				IWorkingCopy[] workingCopies,
 				IProgressMonitor monitor) throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
@@ -1111,7 +1114,7 @@ public abstract class KotlinElement implements IMember {
 				@Override
 				public void refresh(IProgressMonitor monitor) {}
 				@Override
-				public void store(java.io.OutputStream outputStream,
+				public void store(OutputStream outputStream,
 						IProgressMonitor monitor) {}
 			};
 			cachedEmptyHierarchy = hierarchy;
@@ -1237,7 +1240,6 @@ public abstract class KotlinElement implements IMember {
 			// No-op
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IAnnotation getAnnotation(String name) {
 			return null;
@@ -1358,14 +1360,14 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public String getKey() {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public IMemberValuePair getDefaultValue()
 				throws JavaModelException {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -1391,7 +1393,7 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public ITypeParameter getTypeParameter(String name) {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
@@ -1432,7 +1434,6 @@ public abstract class KotlinElement implements IMember {
 			return false;
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IAnnotation getAnnotation(String name) {
 			return null;
@@ -1519,16 +1520,15 @@ public abstract class KotlinElement implements IMember {
 		@CoverageExcludeGenerated
 		@Override
 		public Object getConstant() throws JavaModelException {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
 		@CoverageExcludeGenerated
 		@Override
 		public String getKey() {
-			return null;
+			throw new UnsupportedOperationException();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IAnnotation getAnnotation(String name) {
 			return null;

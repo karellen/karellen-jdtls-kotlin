@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.TerminalNode;
 
 import co.karellen.jdtls.kotlin.parser.KotlinParser;
 import co.karellen.jdtls.kotlin.parser.KotlinParserBaseVisitor;
@@ -444,7 +445,7 @@ public class KotlinReferenceFinder extends KotlinParserBaseVisitor<Void> {
 	}
 
 	private void matchStringTemplateRef(
-			org.antlr.v4.runtime.tree.TerminalNode refNode) {
+			TerminalNode refNode) {
 		String text = refNode.getText();
 		if (text != null && text.length() >= 2) {
 			String name = text.substring(1); // strip $

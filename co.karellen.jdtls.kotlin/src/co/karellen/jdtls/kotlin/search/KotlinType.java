@@ -161,23 +161,30 @@ public class KotlinType {
 	private final String simpleName;
 	private final boolean nullable;
 	private final List<KotlinType> typeArguments;
+	private final KotlinType declaredType;
 
 	public KotlinType(String packageName, String simpleName) {
-		this(packageName, simpleName, false, Collections.emptyList());
+		this(packageName, simpleName, false, Collections.emptyList(), null);
 	}
 
 	public KotlinType(String packageName, String simpleName, boolean nullable) {
-		this(packageName, simpleName, nullable, Collections.emptyList());
+		this(packageName, simpleName, nullable, Collections.emptyList(), null);
 	}
 
 	public KotlinType(String packageName, String simpleName, boolean nullable,
 			List<KotlinType> typeArguments) {
+		this(packageName, simpleName, nullable, typeArguments, null);
+	}
+
+	private KotlinType(String packageName, String simpleName, boolean nullable,
+			List<KotlinType> typeArguments, KotlinType declaredType) {
 		this.packageName = packageName;
 		this.simpleName = simpleName;
 		this.nullable = nullable;
 		this.typeArguments = typeArguments != null
 				? Collections.unmodifiableList(typeArguments)
 				: Collections.emptyList();
+		this.declaredType = declaredType;
 	}
 
 	public String getPackageName() {
@@ -207,12 +214,56 @@ public class KotlinType {
 		return packageName == null && "?".equals(simpleName);
 	}
 
+	public KotlinType getDeclaredType() {
+		return declaredType;
+	}
+
+	/**
+	 * Returns this type and its declared type (if any) as a list, for
+	 * cases where both the concrete and declared types need to be checked
+	 * (e.g., receiver verification against a narrowed variable).
+	 *
+	 * @return a list containing this type, and the declared type if present
+	 */
+	public List<KotlinType> allTypes() {
+		if (declaredType == null) {
+			return List.of(this);
+		}
+		return List.of(this, declaredType);
+	}
+
+	public KotlinType withDeclaredType(KotlinType declaredType) {
+		return new KotlinType(packageName, simpleName, nullable,
+				typeArguments, declaredType);
+	}
+
 	public KotlinType withNullable(boolean nullable) {
-		return new KotlinType(packageName, simpleName, nullable, typeArguments);
+		return new KotlinType(packageName, simpleName, nullable,
+				typeArguments, declaredType);
 	}
 
 	public KotlinType withTypeArguments(List<KotlinType> typeArguments) {
-		return new KotlinType(packageName, simpleName, nullable, typeArguments);
+		return new KotlinType(packageName, simpleName, nullable,
+				typeArguments, declaredType);
+	}
+
+	/**
+	 * Narrows this type from a declared type by inheriting type arguments
+	 * (if this type has none and the declared type does) and setting the
+	 * declared type. Used when a variable's inferred type is more specific
+	 * than its declared type (e.g., assignment narrowing).
+	 *
+	 * @param declaredType the original declared type
+	 * @return this type with inherited type arguments and declared type set
+	 */
+	public KotlinType narrowFrom(KotlinType declaredType) {
+		KotlinType result = this;
+		if (result.getTypeArguments().isEmpty()
+				&& !declaredType.getTypeArguments().isEmpty()) {
+			result = result.withTypeArguments(
+					declaredType.getTypeArguments());
+		}
+		return result.withDeclaredType(declaredType);
 	}
 
 	/**
