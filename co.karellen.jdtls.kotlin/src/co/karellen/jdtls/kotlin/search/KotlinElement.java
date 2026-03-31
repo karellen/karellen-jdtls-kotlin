@@ -728,23 +728,20 @@ public abstract class KotlinElement implements IMember {
 			return result.toArray(new IType[0]);
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IField getField(String name) {
-			throw new UnsupportedOperationException();
+			return null;
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IMethod getMethod(String name,
 				String[] parameterTypeSignatures) {
-			throw new UnsupportedOperationException();
+			return null;
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IType getType(String name) {
-			throw new UnsupportedOperationException();
+			return null;
 		}
 
 		@CoverageExcludeGenerated
@@ -1363,11 +1360,10 @@ public abstract class KotlinElement implements IMember {
 			throw new UnsupportedOperationException();
 		}
 
-		@CoverageExcludeGenerated
 		@Override
 		public IMemberValuePair getDefaultValue()
 				throws JavaModelException {
-			throw new UnsupportedOperationException();
+			return null;
 		}
 
 		@CoverageExcludeGenerated
