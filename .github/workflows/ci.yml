@@ -210,6 +210,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Upload release m2 artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eEuo pipefail
+          tar czf m2-kotlin-plugin.tar.gz -C ~/.m2/repository co/karellen .meta
+          gh release upload "${GITHUB_REF_NAME}" m2-kotlin-plugin.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Trigger karellen-jdtls build (release)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
