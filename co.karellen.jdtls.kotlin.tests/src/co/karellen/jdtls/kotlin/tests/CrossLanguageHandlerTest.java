@@ -1389,6 +1389,61 @@ public class CrossLanguageHandlerTest {
 	}
 
 	/**
+	 * HoverInfoProvider.computeJavadoc() calls
+	 * {@code method.getDefaultValue()} for annotation member default
+	 * values. Must not throw.
+	 */
+	@Test
+	public void testGetDefaultValueOnKotlinMethodDoesNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations(
+				"handlerTestMethod", project);
+		List<SearchMatch> ktMatches = filterKotlinMatches(matches);
+		assertTrue(ktMatches.size() >= 1);
+
+		SearchMatch match = ktMatches.get(0);
+		IMethod method = (IMethod) match.getElement();
+		assertTrue(method instanceof KotlinElement.KotlinMethodElement);
+
+		// Simulate HoverInfoProvider.getDefaultValue():
+		var defaultValue = method.getDefaultValue();
+		// null is correct — Kotlin methods don't have annotation defaults
+		assertEquals(null, defaultValue);
+	}
+
+	/**
+	 * CoreJavadocAccess.getJavaFxPropertyDoc() calls
+	 * {@code type.getMethod(name, paramTypes)} to look up JavaFX
+	 * property accessors. Must return null, not throw.
+	 */
+	@Test
+	public void testTypeMemberLookupMethodsDoNotThrow()
+			throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+				"HandlerTestType", project);
+		assertTrue(matches.size() >= 1);
+
+		IType type = (IType) matches.get(0).getElement();
+		assertTrue(type instanceof KotlinElement.KotlinTypeElement);
+
+		// Simulate CoreJavadocAccess.getJavaFxPropertyDoc():
+		// type.getMethod("fooProperty", new String[0])
+		IMethod m = type.getMethod("nonExistent", new String[0]);
+		assertEquals(null, m);
+
+		// Also exercised by Javadoc resolution
+		IField f = type.getField("nonExistent");
+		assertEquals(null, f);
+
+		IType t = type.getType("NonExistent");
+		assertEquals(null, t);
+	}
+
+	/**
 	 * Replicates JsonRpcHelpers.toLine(IDocument, offset): converts a
 	 * character offset to a 0-based [line, column] pair.
 	 */
