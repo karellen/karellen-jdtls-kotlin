@@ -4,7 +4,7 @@
 	<parent>
 		<groupId>co.karellen.jdtls.kotlin</groupId>
 		<artifactId>parent</artifactId>
-		<version>1.0.4-SNAPSHOT</version>
+		<version>1.0.4</version>
 	</parent>
 	<artifactId>co.karellen.jdtls.kotlin</artifactId>
 	<name>Karellen JDTLS Kotlin :: Plugin</name>
