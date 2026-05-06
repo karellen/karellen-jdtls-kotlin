@@ -904,7 +904,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		if (name == null || mp.selector == null) {
 			return false;
 		}
-		return name.equalsIgnoreCase(new String(mp.selector));
+		return mp.matchesName(mp.selector, name.toCharArray());
 	}
 
 	private boolean matchesFieldName(
@@ -918,7 +918,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		if (fieldName == null) {
 			return false;
 		}
-		return name.equalsIgnoreCase(new String(fieldName));
+		return pattern.matchesName(fieldName, name.toCharArray());
 	}
 
 	private boolean matchesPropertyAccessor(

@@ -202,6 +202,41 @@ public class WorkspaceSymbolSearchTest {
 				"search() with participants should find Kotlin type in sub-package");
 	}
 
+	@Test
+	public void testSearchWithParticipantsFindsKotlinMethodExact() throws CoreException {
+		TestHelpers.createFile("/WorkspaceSymbolTest/src/service.kt",
+				"package com.example\n\n"
+						+ "fun populate() {}\n"
+						+ "fun processWsData() {}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		List<SearchMatch> matches = TestHelpers.searchMethodDeclarations("populate", project);
+		List<SearchMatch> ktMatches = TestHelpers.filterKotlinMatches(matches);
+
+		assertFalse(ktMatches.isEmpty(),
+				"search() with participants should find Kotlin method with exact match");
+	}
+
+	@Test
+	public void testSearchWithParticipantsFindsKotlinMethodPatternMatch() throws CoreException {
+		TestHelpers.createFile("/WorkspaceSymbolTest/src/service.kt",
+				"package com.example\n\n"
+						+ "fun populateInventory() {}\n"
+						+ "fun processInventoryData() {}\n");
+		TestHelpers.waitUntilIndexesReady();
+
+		SearchPattern pattern = SearchPattern.createPattern(
+				"populate*",
+				IJavaSearchConstants.METHOD,
+				IJavaSearchConstants.DECLARATIONS,
+				SearchPattern.R_PATTERN_MATCH);
+		List<SearchMatch> matches = TestHelpers.executeSearch(pattern, project);
+		List<SearchMatch> ktMatches = TestHelpers.filterKotlinMatches(matches);
+
+		assertFalse(ktMatches.isEmpty(),
+				"search() with participants should find Kotlin method with pattern match");
+	}
+
 	private List<TypeNameMatch> searchAllTypeNames(char[] packageName, char[] typeName,
 			int matchRule) throws CoreException {
 		SearchEngine engine = new SearchEngine();

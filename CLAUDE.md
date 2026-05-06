@@ -115,7 +115,7 @@ ANTLR4-based Kotlin parser with 8-phase pipeline: declaration extraction, symbol
 table, scope-based type resolution, overload resolution, lambda type propagation,
 smart cast narrowing, index emission, and IJavaElement resolution. All cross-language
 LSP features working: find references, go-to-definition, hover, call hierarchy, type
-hierarchy, document symbols, and code lens. Bidirectional Java↔Kotlin property/getter
+hierarchy, document symbols, workspace symbols, and code lens. Bidirectional Java↔Kotlin property/getter
 interop: searching for Java `getName()` finds Kotlin `obj.name` access and vice
 versa. `codeSelect()` resolves type references, import targets, and expression
 receivers to Java `IType` elements. File-facade classes (`FileNameKt`) indexed as
@@ -124,6 +124,6 @@ Import statements indexed as REF entries. `OrPattern` (REFERENCES + DECLARATIONS
 combined) unwrapped and dispatched to sub-patterns for correct `includeDeclaration`
 handling. Flow-sensitive assignment-based type narrowing for val/var declarations,
 var reassignments (offset-scoped), property assignments with recursive alias
-propagation. 354 integration tests, 87% instruction / 68% branch coverage. Product
+propagation. 362 integration tests, 87% instruction / 68% branch coverage. Product
 module produces a self-contained distribution (~48MB tar.gz) with native Eclipse
 launcher (`jdtls`), all jdtls bundles, and the Kotlin plugin.
