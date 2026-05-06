@@ -809,7 +809,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		if (!hasTopLevelDeclarations(fileModel)) {
 			return;
 		}
-		if (facadeName.equalsIgnoreCase(new String(tdp.simpleName))) {
+		if (tdp.matchesName(tdp.simpleName, facadeName.toCharArray())) {
 			KotlinElement.KotlinTypeElement facadeType =
 					KotlinElement.buildFileFacadeType(cu, packageName);
 			SearchMatch match = new SearchMatch(facadeType,
@@ -852,8 +852,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		if (name == null || tdp.simpleName == null) {
 			return false;
 		}
-		// QualifiedTypeDeclarationPattern stores simpleName in lowercase
-		return name.equalsIgnoreCase(new String(tdp.simpleName));
+		return tdp.matchesName(tdp.simpleName, name.toCharArray());
 	}
 
 	private boolean hasSupertype(KotlinDeclaration.TypeDeclaration typeDecl,
@@ -980,7 +979,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		if (name == null || tdp.simpleName == null) {
 			return false;
 		}
-		return name.equalsIgnoreCase(new String(tdp.simpleName));
+		return tdp.matchesName(tdp.simpleName, name.toCharArray());
 	}
 
 	private void reportTypeAliasMatch(
