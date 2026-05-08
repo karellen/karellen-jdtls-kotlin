@@ -15,19 +15,33 @@
  */
 package co.karellen.jdtls.kotlin.tests;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IType;
+import org.eclipse.jdt.core.ITypeHierarchy;
+import org.eclipse.jdt.core.search.IJavaSearchConstants;
+import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.SearchParticipant;
+import org.eclipse.jdt.core.search.SearchPattern;
+import org.eclipse.jdt.core.search.SearchRequestor;
 import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import co.karellen.jdtls.kotlin.search.KotlinCompilationUnit;
+import co.karellen.jdtls.kotlin.search.KotlinModelManager;
 
 /**
  * Cross-language implementation/subtype search tests. Verifies that
@@ -118,6 +132,109 @@ public class CrossLanguageImplementationTest {
 		// PipelineStatus_V19 is a sealed class with subclasses
 		List<SearchMatch> impls = TestHelpers.searchImplementors("PipelineStatus_V19", project);
 		assertHasKotlinImplementor(impls, "PipelineStatus_V19");
+	}
+
+	// ---- Handler chain diagnostic tests ----
+
+	@Test
+	public void testImplementorSearchWithFQN() throws CoreException {
+		loadVersionFiles("v14");
+
+		// jdtls ImplementationCollector uses type.getFullyQualifiedName()
+		// with R_EXACT_MATCH | R_CASE_SENSITIVE
+		SearchPattern pattern = SearchPattern.createPattern(
+				"crosslang.v14.BaseService_V14",
+				IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.IMPLEMENTORS,
+				SearchPattern.R_EXACT_MATCH
+						| SearchPattern.R_CASE_SENSITIVE);
+		assertNotNull(pattern, "Pattern should be created from FQN");
+
+		List<SearchMatch> matches = TestHelpers.executeSearch(
+				pattern, project);
+		assertHasKotlinImplementor(matches, "BaseService_V14 (FQN)");
+	}
+
+	@Test
+	public void testImplementorSearchViaCodeSelectAndFQN()
+			throws CoreException {
+		loadVersionFiles("v14");
+
+		IFile ktFile = TestHelpers.getFile(
+				"/" + PROJECT_NAME
+				+ "/src/crosslang/v14/KotlinA_V14.kt");
+		KotlinCompilationUnit cu = KotlinModelManager.getInstance()
+				.getCompilationUnit(ktFile);
+		assertNotNull(cu, "Should get KotlinCompilationUnit");
+
+		// Find offset of "BaseService_V14" interface declaration
+		String source = cu.getSource();
+		int offset = source.indexOf("interface BaseService_V14")
+				+ "interface ".length();
+		assertTrue(offset > "interface ".length(),
+				"Should find BaseService_V14 in source");
+
+		// Step 1: codeSelect at declaration — replicates
+		// JDTUtils.findElementAtSelection()
+		IJavaElement[] selected = cu.codeSelect(offset, 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect should return an element");
+		assertTrue(selected[0] instanceof IType,
+				"Element should be IType, got: "
+				+ selected[0].getClass().getSimpleName());
+
+		IType type = (IType) selected[0];
+
+		// Step 2: newTypeHierarchy — replicates
+		// ImplementationCollector.findTypeImplementations() line 137
+		ITypeHierarchy hierarchy = type.newTypeHierarchy(
+				new NullProgressMonitor());
+		assertNotNull(hierarchy,
+				"Hierarchy should not be null (even if empty)");
+		IType[] subtypes = hierarchy.getAllSubtypes(type);
+		// May be empty for pure Kotlin — that's expected
+
+		// Step 3: supplementary search with contributed participants
+		// — replicates supplementWithContributedImplementations()
+		String fqn = type.getFullyQualifiedName();
+		assertNotNull(fqn, "FQN should not be null");
+
+		SearchPattern implPattern = SearchPattern.createPattern(
+				fqn,
+				IJavaSearchConstants.TYPE,
+				IJavaSearchConstants.IMPLEMENTORS,
+				SearchPattern.R_EXACT_MATCH
+						| SearchPattern.R_CASE_SENSITIVE);
+		assertNotNull(implPattern,
+				"IMPLEMENTORS pattern from FQN should not be null");
+
+		SearchParticipant[] allParticipants =
+				SearchEngine.getSearchParticipants();
+		assertTrue(allParticipants.length > 1,
+				"Should have contributed participants");
+		SearchParticipant[] contributed =
+				java.util.Arrays.copyOfRange(
+						allParticipants, 1, allParticipants.length);
+
+		List<SearchMatch> implMatches = new ArrayList<>();
+		new SearchEngine().search(implPattern, contributed,
+				SearchEngine.createWorkspaceScope(),
+				new SearchRequestor() {
+					@Override
+					public void acceptSearchMatch(SearchMatch match) {
+						implMatches.add(match);
+					}
+				}, new NullProgressMonitor());
+
+		assertFalse(implMatches.isEmpty(),
+				"Contributed participant search with FQN '"
+				+ fqn + "' should find implementors. "
+				+ "Subtypes from hierarchy: " + subtypes.length);
+
+		boolean hasKotlin = implMatches.stream()
+				.anyMatch(m -> m.getElement() instanceof IType);
+		assertTrue(hasKotlin,
+				"Should find at least one IType implementor");
 	}
 
 	// ---- Helpers ----

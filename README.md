@@ -140,7 +140,7 @@ The root `pom.xml` sets `tycho.localArtifacts=consider`, which makes Tycho prefe
 
 ## Build Output
 
-- **Test results**: 362 integration tests, all passing — extension point discovery, indexing pipeline, search pipeline, lifecycle, cross-language type discovery (v1.4-v1.9), hover, implementation search, find references, code lens, call hierarchy (incoming/outgoing), receiver type verification, local variable resolution, field references, type aliases, document symbols, workspace symbols, code select
+- **Test results**: 366 integration tests, all passing — extension point discovery, indexing pipeline, search pipeline, lifecycle, cross-language type discovery (v1.4-v1.9), hover, implementation search, find references, code lens, call hierarchy (incoming/outgoing), receiver type verification, local variable resolution, field references, type aliases, document symbols, workspace symbols, code select
 - **Distribution archive**: `co.karellen.jdtls.kotlin.product/distro/karellen-jdtls-kotlin-<timestamp>.tar.gz` (~48MB)
 - **Materialized products**: platform-specific directories under `co.karellen.jdtls.kotlin.product/target/products/`
 
@@ -197,7 +197,7 @@ The `jdtls` binary reads `jdtls.ini` for default VM arguments. The product uses 
 
 ## Current Status
 
-The plugin has a working ANTLR4-based Kotlin parser with an 8-phase pipeline (declaration extraction, symbol table, scope-walking type resolution, overload resolution, lambda propagation, smart cast narrowing, index emission, IJavaElement resolution). All cross-language search features work bidirectionally across the Java/Kotlin boundary: type hierarchy, call hierarchy (incoming and outgoing), find references, hover, go-to-definition, implementation search, code lens, workspace symbols, and document symbols. 362 integration tests pass with 87% instruction / 68% branch coverage.
+The plugin has a working ANTLR4-based Kotlin parser with an 8-phase pipeline (declaration extraction, symbol table, scope-walking type resolution, overload resolution, lambda propagation, smart cast narrowing, index emission, IJavaElement resolution). All cross-language search features work bidirectionally across the Java/Kotlin boundary: type hierarchy, call hierarchy (incoming and outgoing), find references, hover, go-to-definition, implementation search, code lens, workspace symbols, and document symbols. 366 integration tests pass with 87% instruction / 68% branch coverage.
 
 Key capabilities:
 - **Receiver type verification** filters false positives by resolving receiver expressions to types via scope chain (file, class, function, and local variable scopes), import resolution, and subtype hierarchy checking with JDT delegation for Java types
