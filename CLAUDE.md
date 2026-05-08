@@ -124,6 +124,6 @@ Import statements indexed as REF entries. `OrPattern` (REFERENCES + DECLARATIONS
 combined) unwrapped and dispatched to sub-patterns for correct `includeDeclaration`
 handling. Flow-sensitive assignment-based type narrowing for val/var declarations,
 var reassignments (offset-scoped), property assignments with recursive alias
-propagation. 362 integration tests, 87% instruction / 68% branch coverage. Product
+propagation. 366 integration tests, 87% instruction / 68% branch coverage. Product
 module produces a self-contained distribution (~48MB tar.gz) with native Eclipse
 launcher (`jdtls`), all jdtls bundles, and the Kotlin plugin.
