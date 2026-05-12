@@ -36,7 +36,7 @@ import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.Signature;
 import org.eclipse.jdt.core.search.SearchMatch;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.eclipse.jface.text.Document;
 import org.eclipse.jface.text.IDocument;
 import org.junit.jupiter.api.AfterEach;
@@ -92,7 +92,7 @@ public class CrossLanguageHandlerTest {
 
 	@BeforeEach
 	public void setUp() throws CoreException {
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
 	}
 
@@ -1237,6 +1237,183 @@ public class CrossLanguageHandlerTest {
 				.toList();
 		assertTrue(ktMatches.size() >= 1,
 				"Should find readOnly via getReadOnly in class");
+	}
+
+	// ---- resolveType via import resolver (#36) ----
+
+	@Test
+	public void testResolveTypeViaImportResolver() throws Exception {
+		IJavaProject jreProject = TestHelpers.createJavaProjectWithJRE(
+				PROJECT_NAME + "JRE", "src");
+		try {
+			TestHelpers.createFolder(
+					"/" + PROJECT_NAME + "JRE/src/resolve/test");
+			TestHelpers.createFile(
+					"/" + PROJECT_NAME + "JRE/src/resolve/test/ResolveTest.kt",
+					"package resolve.test\n\n"
+					+ "class ResolveTestType {\n"
+					+ "    fun getString(): String = \"hello\"\n"
+					+ "}\n");
+			TestHelpers.waitUntilIndexesReady();
+
+			List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+					"ResolveTestType", jreProject);
+			assertTrue(matches.size() >= 1,
+					"Should find ResolveTestType");
+
+			IType type = (IType) matches.get(0).getElement();
+			assertTrue(type instanceof KotlinElement.KotlinTypeElement);
+
+			String[][] resolved = type.resolveType("String");
+			assertNotNull(resolved,
+					"resolveType('String') should resolve via "
+					+ "default imports");
+			assertEquals(1, resolved.length);
+			assertEquals("java.lang", resolved[0][0]);
+			assertEquals("String", resolved[0][1]);
+		} finally {
+			TestHelpers.deleteProject(PROJECT_NAME + "JRE");
+		}
+	}
+
+	@Test
+	public void testResolveTypeViaExplicitImport() throws Exception {
+		IJavaProject jreProject = TestHelpers.createJavaProjectWithJRE(
+				PROJECT_NAME + "JRE2", "src");
+		try {
+			TestHelpers.createFolder(
+					"/" + PROJECT_NAME + "JRE2/src/resolve/test");
+			TestHelpers.createFile(
+					"/" + PROJECT_NAME
+					+ "JRE2/src/resolve/test/ImportResolve.kt",
+					"package resolve.test\n\n"
+					+ "import java.math.BigDecimal\n\n"
+					+ "class ImportResolveType {\n"
+					+ "    fun getAmount(): BigDecimal = BigDecimal.ZERO\n"
+					+ "}\n");
+			TestHelpers.waitUntilIndexesReady();
+
+			List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+					"ImportResolveType", jreProject);
+			assertTrue(matches.size() >= 1,
+					"Should find ImportResolveType");
+
+			IType type = (IType) matches.get(0).getElement();
+			String[][] resolved = type.resolveType("BigDecimal");
+			assertNotNull(resolved,
+					"resolveType('BigDecimal') should resolve via "
+					+ "explicit import");
+			assertEquals(1, resolved.length);
+			assertEquals("java.math", resolved[0][0]);
+			assertEquals("BigDecimal", resolved[0][1]);
+		} finally {
+			TestHelpers.deleteProject(PROJECT_NAME + "JRE2");
+		}
+	}
+
+	@Test
+	public void testResolveTypeForMethodReturnType() throws Exception {
+		IJavaProject jreProject = TestHelpers.createJavaProjectWithJRE(
+				PROJECT_NAME + "JRE3", "src");
+		try {
+			TestHelpers.createFolder(
+					"/" + PROJECT_NAME + "JRE3/src/resolve/test");
+			TestHelpers.createFile(
+					"/" + PROJECT_NAME
+					+ "JRE3/src/resolve/test/MethodReturn.kt",
+					"package resolve.test\n\n"
+					+ "class MethodReturnType {\n"
+					+ "    fun getName(): String = \"test\"\n"
+					+ "    fun getCount(): Int = 0\n"
+					+ "}\n");
+			TestHelpers.waitUntilIndexesReady();
+
+			List<SearchMatch> matches =
+					TestHelpers.searchMethodDeclarations(
+							"getName", jreProject);
+			List<SearchMatch> ktMatches = filterKotlinMatches(matches);
+			assertTrue(ktMatches.size() >= 1,
+					"Should find getName in .kt");
+
+			IMethod method = (IMethod) ktMatches.get(0).getElement();
+			String returnType = method.getReturnType();
+			assertNotNull(returnType, "Return type should not be null");
+
+			String typeName = Signature.toString(returnType);
+			IType declaringType = method.getDeclaringType();
+			assertNotNull(declaringType);
+
+			String[][] resolved = declaringType.resolveType(typeName);
+			assertNotNull(resolved,
+					"resolveType on method return type should succeed");
+			assertTrue(resolved.length > 0);
+		} finally {
+			TestHelpers.deleteProject(PROJECT_NAME + "JRE3");
+		}
+	}
+
+	@Test
+	public void testResolveTypeForFieldType() throws Exception {
+		IJavaProject jreProject = TestHelpers.createJavaProjectWithJRE(
+				PROJECT_NAME + "JRE4", "src");
+		try {
+			TestHelpers.createFolder(
+					"/" + PROJECT_NAME + "JRE4/src/resolve/test");
+			TestHelpers.createFile(
+					"/" + PROJECT_NAME
+					+ "JRE4/src/resolve/test/FieldType.kt",
+					"package resolve.test\n\n"
+					+ "class FieldTypeClass {\n"
+					+ "    val label: String = \"test\"\n"
+					+ "    val count: Int = 0\n"
+					+ "}\n");
+			TestHelpers.waitUntilIndexesReady();
+
+			List<SearchMatch> matches =
+					TestHelpers.searchFieldDeclarations(
+							"label", jreProject);
+			List<SearchMatch> ktMatches = filterKotlinMatches(matches);
+			assertTrue(ktMatches.size() >= 1,
+					"Should find label in .kt");
+
+			IField field = (IField) ktMatches.get(0).getElement();
+			String typeSig = field.getTypeSignature();
+			assertNotNull(typeSig);
+
+			String typeName = Signature.toString(typeSig);
+			IType declaringType = field.getDeclaringType();
+			assertNotNull(declaringType);
+
+			String[][] resolved = declaringType.resolveType(typeName);
+			assertNotNull(resolved,
+					"resolveType on field type should succeed");
+			assertTrue(resolved.length > 0);
+		} finally {
+			TestHelpers.deleteProject(PROJECT_NAME + "JRE4");
+		}
+	}
+
+	@Test
+	public void testDeclarationFallbackForTypeElement() throws Exception {
+		createTestFile();
+
+		List<SearchMatch> matches = TestHelpers.searchKotlinTypes(
+				"HandlerTestType", project);
+		assertTrue(matches.size() >= 1);
+
+		IType type = (IType) matches.get(0).getElement();
+		assertTrue(type instanceof KotlinElement.KotlinTypeElement);
+
+		ICompilationUnit cu = (ICompilationUnit) type.getAncestor(
+				IJavaElement.COMPILATION_UNIT);
+		assertNotNull(cu);
+		assertTrue(cu instanceof KotlinCompilationUnit);
+
+		IJavaElement[] selected = cu.codeSelect(
+				type.getSourceRange().getOffset(), 0);
+		assertTrue(selected.length >= 1,
+				"codeSelect on type declaration should return element");
+		assertEquals("HandlerTestType", selected[0].getElementName());
 	}
 
 	// ---- Helpers ----

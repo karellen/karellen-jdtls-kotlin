@@ -29,9 +29,10 @@ import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.DerivedSourceSearchParticipant;
 import org.eclipse.jdt.core.search.SearchParticipant;
 import org.eclipse.jdt.core.manipulation.JavaManipulation;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.eclipse.jdt.internal.corext.callhierarchy.CallHierarchyCore;
 import org.eclipse.jdt.internal.corext.callhierarchy.MethodWrapper;
 import org.junit.jupiter.api.AfterEach;
@@ -60,7 +61,7 @@ public class CrossLanguageCallableRefInfixTest {
 			JavaManipulation.setPreferenceNodeId(
 					"co.karellen.jdtls.kotlin.tests");
 		}
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
 	}
 
@@ -172,8 +173,8 @@ public class CrossLanguageCallableRefInfixTest {
 				"Should find callerFn element");
 
 		// Get outgoing calls
-		SearchParticipant participant =
-				SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant participant =
+				DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		SearchDocument doc = participant.getDocument(
 				ktFile.getFullPath().toString());
 		SearchMatch[] callees = participant.locateCallees(
@@ -262,8 +263,8 @@ public class CrossLanguageCallableRefInfixTest {
 						.getCompilationUnit(ktFile);
 		assertNotNull(cu, "CU should not be null");
 
-		SearchParticipant participant =
-				SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant participant =
+				DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		SearchDocument doc = participant.getDocument(
 				ktFile.getFullPath().toString());
 

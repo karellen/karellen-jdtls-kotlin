@@ -30,7 +30,7 @@ import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.search.SearchMatch;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,7 +51,7 @@ public class KotlinLanguageConstructTest {
 
 	@BeforeEach
 	public void setUp() throws CoreException {
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
 	}
 

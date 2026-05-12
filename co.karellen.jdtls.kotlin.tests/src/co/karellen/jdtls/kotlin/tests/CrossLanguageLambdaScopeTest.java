@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.search.SearchMatch;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +43,7 @@ public class CrossLanguageLambdaScopeTest {
 
 	@BeforeEach
 	public void setUp() throws CoreException {
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		project = TestHelpers.createJavaProject(PROJECT_NAME, "src");
 	}
 

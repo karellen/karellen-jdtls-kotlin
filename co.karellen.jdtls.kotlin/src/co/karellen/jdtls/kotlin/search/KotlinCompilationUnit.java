@@ -725,6 +725,33 @@ public class KotlinCompilationUnit implements ICompilationUnit {
 				: new IJavaElement[0];
 	}
 
+	ImportResolver getImportResolver() {
+		String path = file != null ? file.getFullPath().toPortableString()
+				: null;
+		if (path == null) {
+			return null;
+		}
+		try {
+			IBuffer buf = getBuffer();
+			if (buf == null) {
+				return null;
+			}
+			String contents = buf.getContents();
+			if (contents == null || contents.isEmpty()) {
+				return null;
+			}
+			KotlinFileModel fileModel = KotlinModelManager.getInstance()
+					.getFileModel(path, contents.toCharArray());
+			if (fileModel == null) {
+				return null;
+			}
+			return new ImportResolver(
+					fileModel.getPackageName(), fileModel.getImports());
+		} catch (JavaModelException e) {
+			return null;
+		}
+	}
+
 	/**
 	 * Resolves the reference at the given offset to its target element.
 	 * Handles type references, import statements, and expression primaries

@@ -3,13 +3,13 @@
 [![CI](https://github.com/karellen/karellen-jdtls-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/karellen/karellen-jdtls-kotlin/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/karellen/karellen-jdtls-kotlin/badge.svg?branch=master)](https://coveralls.io/github/karellen/karellen-jdtls-kotlin?branch=master)
 
-Kotlin language support for [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) (jdtls) via JDT Core's `SearchParticipant` extension point.
+Kotlin language support for [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls) (jdtls) via JDT Core's `DerivedSourceSearchParticipant` extension point.
 
 This project provides cross-language code intelligence between Java and Kotlin source files: type hierarchy, call hierarchy, find references, hover, and go-to-definition all work bidirectionally across the Java/Kotlin boundary.
 
 ## How It Works
 
-The plugin registers a `KotlinSearchParticipant` for `.kt`/`.kts` files via a new `org.eclipse.jdt.core.searchParticipant` extension point in JDT Core. When JDT Core's `IndexManager` discovers Kotlin files in source folders, it routes them to the participant for indexing. The participant parses Kotlin source, emits index entries (type declarations, method references, supertype references, etc.), and JDT's search infrastructure automatically includes Kotlin results in all cross-language queries.
+The plugin registers a `KotlinSearchParticipant` for `.kt`/`.kts` files via a new `org.eclipse.jdt.core.derivedSourceSearchParticipant` extension point in JDT Core. When JDT Core's `IndexManager` discovers Kotlin files in source folders, it routes them to the participant for indexing. The participant parses Kotlin source, emits index entries (type declarations, method references, supertype references, etc.), and JDT's search infrastructure automatically includes Kotlin results in all cross-language queries.
 
 No AspectJ weaving, no light classes, no IntelliJ platform dependency.
 
@@ -19,10 +19,10 @@ The system spans three repositories with changes at two integration boundaries:
 
 ### Write Side — JDT Core Extension Point (PR 1)
 
-JDT Core's indexing pipeline is extended to discover `javaDerivedSource` files (`.kt`, `.kts`) alongside Java files and route them to contributed `SearchParticipant` implementations:
+JDT Core's indexing pipeline is extended to discover `javaDerivedSource` files (`.kt`, `.kts`) alongside Java files and route them to contributed `DerivedSourceSearchParticipant` implementations:
 
-- **Extension point**: `org.eclipse.jdt.core.searchParticipant` — maps file extensions to `SearchParticipant` classes
-- **`SearchParticipantRegistry`**: lazily loads contributed participants, maps each file extension to a singleton participant instance
+- **Extension point**: `org.eclipse.jdt.core.derivedSourceSearchParticipant` — maps file extensions to `DerivedSourceSearchParticipant` classes
+- **`DerivedSourceSearchParticipantRegistry`**: lazily loads contributed participants, maps each file extension to a singleton participant instance
 - **File discovery**: `IndexAllProject`, `AddFolderToIndex`, `DeltaProcessor` — add `isJavaDerivedFileName()` checks alongside existing `isJavaLikeFileName()` checks
 - **Index routing**: `IndexManager.addDerivedSource()` — routes discovered files to the registered participant via `scheduleDocumentIndexing()`
 - **Search API**: `SearchEngine.getSearchParticipants()` — returns `[default Java participant, ...contributed participants]`
@@ -64,9 +64,9 @@ The OSGi bundle registers with JDT Core via `plugin.xml`:
 </extension>
 
 <!-- Register KotlinSearchParticipant for .kt/.kts files -->
-<extension point="org.eclipse.jdt.core.searchParticipant">
-   <searchParticipant
-         id="co.karellen.jdtls.kotlin.searchParticipant"
+<extension point="org.eclipse.jdt.core.derivedSourceSearchParticipant">
+   <derivedSourceSearchParticipant
+         id="co.karellen.jdtls.kotlin.derivedSourceSearchParticipant"
          class="co.karellen.jdtls.kotlin.search.KotlinSearchParticipant"
          fileExtensions="kt,kts"/>
 </extension>
@@ -85,7 +85,7 @@ The parser pipeline includes a symbol table, scope-walking type resolver, overlo
 .kt file created/modified in workspace
   → JDT Core DeltaProcessor detects change
     → isJavaDerivedFileName() matches .kt
-      → SearchParticipantRegistry looks up participant for "kt"
+      → DerivedSourceSearchParticipantRegistry looks up participant for "kt"
         → IndexManager.addDerivedSource() schedules indexing
           → KotlinSearchParticipant.indexDocument() parses and emits entries
 
@@ -111,7 +111,7 @@ LSP client requests textDocument/references
 
 This project depends on two upstream forks that must be built and installed locally:
 
-1. **JDT Core fork** — adds `org.eclipse.jdt.core.searchParticipant` extension point and wires the indexing pipeline for `javaDerivedSource` files
+1. **JDT Core fork** — adds `org.eclipse.jdt.core.derivedSourceSearchParticipant` extension point and wires the indexing pipeline for `javaDerivedSource` files
    - Repository: `eclipse.jdt.core`, branch `search-participant-extension-point`
 
 2. **jdtls fork** — updates search call sites to use `SearchEngine.getSearchParticipants()` instead of hardcoding the default Java participant

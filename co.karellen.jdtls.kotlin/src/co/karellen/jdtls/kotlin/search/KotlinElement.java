@@ -1123,9 +1123,12 @@ public abstract class KotlinElement implements IMember {
 				throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
-				return javaType.resolveType(typeName);
+				String[][] result = javaType.resolveType(typeName);
+				if (result != null) {
+					return result;
+				}
 			}
-			return null;
+			return resolveTypeViaImports(typeName);
 		}
 
 		@Override
@@ -1133,7 +1136,43 @@ public abstract class KotlinElement implements IMember {
 				WorkingCopyOwner owner) throws JavaModelException {
 			IType javaType = resolveToJavaType();
 			if (javaType != null) {
-				return javaType.resolveType(typeName, owner);
+				String[][] result = javaType.resolveType(typeName, owner);
+				if (result != null) {
+					return result;
+				}
+			}
+			return resolveTypeViaImports(typeName);
+		}
+
+		private String[][] resolveTypeViaImports(String typeName) {
+			KotlinCompilationUnit cu = getCompilationUnit();
+			if (cu == null) {
+				return null;
+			}
+			ImportResolver resolver = cu.getImportResolver();
+			if (resolver == null) {
+				return null;
+			}
+			IJavaElement jp = getAncestor(IJavaElement.JAVA_PROJECT);
+			if (!(jp instanceof IJavaProject project)) {
+				return null;
+			}
+			List<String> candidates = resolver.resolveAllCandidates(
+					typeName);
+			for (String fqn : candidates) {
+				try {
+					IType found = project.findType(fqn);
+					if (found != null && found.exists()) {
+						int lastDot = fqn.lastIndexOf('.');
+						String pkg = lastDot >= 0
+								? fqn.substring(0, lastDot) : "";
+						String simple = lastDot >= 0
+								? fqn.substring(lastDot + 1) : fqn;
+						return new String[][] { { pkg, simple } };
+					}
+				} catch (JavaModelException e) {
+					// Try next candidate
+				}
 			}
 			return null;
 		}

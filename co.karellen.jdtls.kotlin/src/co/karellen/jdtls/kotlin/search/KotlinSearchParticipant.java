@@ -59,6 +59,7 @@ import org.eclipse.jdt.core.search.IJavaSearchScope;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.DerivedSourceSearchParticipant;
 import org.eclipse.jdt.core.search.SearchParticipant;
 import org.eclipse.jdt.core.search.SearchPattern;
 import org.eclipse.jdt.core.search.SearchRequestor;
@@ -78,13 +79,13 @@ import org.eclipse.jdt.internal.core.search.matching.TypeReferencePattern;
 /**
  * Kotlin search participant for {@code .kt} and {@code .kts} files.
  * <p>
- * Registers via the {@code org.eclipse.jdt.core.searchParticipant} extension
+ * Registers via the {@code org.eclipse.jdt.core.derivedSourceSearchParticipant} extension
  * point. Parses Kotlin source files using an ANTLR4-based parser to extract
  * declarations and emit JDT index entries for cross-language code intelligence.
  *
  * @author Arcadiy Ivanov
  */
-public class KotlinSearchParticipant extends SearchParticipant {
+public class KotlinSearchParticipant extends DerivedSourceSearchParticipant {
 
 	private record EnclosingContext(
 			KotlinDeclaration decl,
@@ -118,12 +119,7 @@ public class KotlinSearchParticipant extends SearchParticipant {
 		return new KotlinSearchDocument(documentPath, this);
 	}
 
-	/**
-	 * Returns a {@link KotlinCompilationUnit} for the given .kt file.
-	 * Intended to override {@code SearchParticipant.getCompilationUnit()}
-	 * once §1c of UPSTREAM-PATCHES.md lands in JDT Core PR #4938.
-	 * Until then, called directly by tests and internal consumers.
-	 */
+	@Override
 	public ICompilationUnit getCompilationUnit(IFile file) {
 		return modelManager.getCompilationUnit(file);
 	}

@@ -28,8 +28,9 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.search.SearchMatch;
 import org.eclipse.jdt.core.search.SearchEngine;
+import org.eclipse.jdt.core.search.DerivedSourceSearchParticipant;
 import org.eclipse.jdt.core.search.SearchParticipant;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,7 +49,7 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@BeforeEach
 	public void setUp() throws CoreException {
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		project = TestHelpers.createJavaProject("KotlinTest", "src");
 	}
 
@@ -62,39 +63,39 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testRegistryHasParticipantForKt() {
-		assertTrue(SearchParticipantRegistry.hasParticipant("kt"),
+		assertTrue(DerivedSourceSearchParticipantRegistry.hasParticipant("kt"),
 				"Registry should have participant for kt");
 	}
 
 	@Test
 	public void testRegistryHasParticipantForKts() {
-		assertTrue(SearchParticipantRegistry.hasParticipant("kts"),
+		assertTrue(DerivedSourceSearchParticipantRegistry.hasParticipant("kts"),
 				"Registry should have participant for kts");
 	}
 
 	@Test
 	public void testRegistryNoParticipantForUnknownExtension() {
-		assertFalse(SearchParticipantRegistry.hasParticipant("unknown_ext"),
+		assertFalse(DerivedSourceSearchParticipantRegistry.hasParticipant("unknown_ext"),
 				"Registry should not have participant for unknown_ext");
 	}
 
 	@Test
 	public void testRegistryGetParticipantSingleton() {
-		SearchParticipant p1 = SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant p1 = DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		assertNotNull(p1, "Should return a participant for kt");
 		assertTrue(p1 instanceof KotlinSearchParticipant,
 				"Should be a KotlinSearchParticipant");
-		SearchParticipant p2 = SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant p2 = DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		assertSame(p1, p2, "Same instance should be returned on second call");
 	}
 
 	@Test
 	public void testGetContributedParticipantsIncludesKotlin() {
-		SearchParticipant[] contributed = SearchParticipantRegistry.getContributedParticipants();
+		DerivedSourceSearchParticipant[] contributed = DerivedSourceSearchParticipantRegistry.getContributedParticipants();
 		assertTrue(contributed.length >= 1,
 				"Should have at least one contributed participant");
 		boolean found = false;
-		for (SearchParticipant p : contributed) {
+		for (DerivedSourceSearchParticipant p : contributed) {
 			if (p instanceof KotlinSearchParticipant) {
 				found = true;
 				break;
@@ -272,11 +273,11 @@ public class KotlinSearchParticipantIntegrationTest {
 
 	@Test
 	public void testRegistryResetClearsCache() {
-		SearchParticipant before = SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant before = DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		assertNotNull(before);
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 
-		SearchParticipant after = SearchParticipantRegistry.getParticipant("kt");
+		DerivedSourceSearchParticipant after = DerivedSourceSearchParticipantRegistry.getParticipant("kt");
 		assertNotNull(after);
 		assertNotSame(before, after, "After reset, a new instance should be created");
 	}

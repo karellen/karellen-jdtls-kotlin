@@ -4,7 +4,7 @@
 
 Kotlin search participant plugin for Eclipse JDT Language Server (jdtls). Registers
 a `KotlinSearchParticipant` for `.kt`/`.kts` files via JDT Core's
-`org.eclipse.jdt.core.searchParticipant` extension point. Enables cross-language
+`org.eclipse.jdt.core.derivedSourceSearchParticipant` extension point. Enables cross-language
 type hierarchy, call hierarchy, find references, hover, and go-to-definition
 between Java and Kotlin source files.
 

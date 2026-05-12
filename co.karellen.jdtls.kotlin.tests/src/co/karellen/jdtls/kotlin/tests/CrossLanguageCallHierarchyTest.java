@@ -47,11 +47,12 @@ import org.eclipse.jdt.core.search.IJavaSearchScope;
 import org.eclipse.jdt.core.search.SearchDocument;
 import org.eclipse.jdt.core.search.SearchEngine;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.jdt.core.search.DerivedSourceSearchParticipant;
 import org.eclipse.jdt.core.search.SearchParticipant;
 import org.eclipse.jdt.core.search.SearchPattern;
 import org.eclipse.jdt.core.search.SearchRequestor;
 import org.eclipse.jdt.core.manipulation.JavaManipulation;
-import org.eclipse.jdt.internal.core.search.indexing.SearchParticipantRegistry;
+import org.eclipse.jdt.internal.core.search.indexing.DerivedSourceSearchParticipantRegistry;
 import org.eclipse.jdt.internal.corext.callhierarchy.CallHierarchyCore;
 import org.eclipse.jdt.internal.corext.callhierarchy.MethodWrapper;
 import org.junit.jupiter.api.AfterAll;
@@ -101,7 +102,7 @@ public class CrossLanguageCallHierarchyTest {
 
 	@BeforeEach
 	public void setUp() throws CoreException {
-		SearchParticipantRegistry.reset();
+		DerivedSourceSearchParticipantRegistry.reset();
 		// Clean src folder contents from previous test
 		org.eclipse.core.resources.IFolder srcFolder =
 				project.getProject().getFolder("src");
@@ -355,7 +356,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		assertNotNull(participant, "Kotlin participant should be registered");
 
@@ -425,7 +426,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
 				"kindTestFunction", project);
@@ -497,7 +498,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 
 		// Get firstFunction declaration
@@ -557,7 +558,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
 				"noCallsFunction", project);
@@ -587,7 +588,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
 				"offsetTestFunction", project);
@@ -635,7 +636,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers.searchMethodDeclarations(
 				"stubTestFunction", project);
@@ -699,7 +700,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("lookupValue", project);
@@ -749,7 +750,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("chainTest", project);
@@ -800,7 +801,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("doWork", project);
@@ -844,7 +845,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("superTest", project);
@@ -957,7 +958,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("caller", project);
@@ -1301,7 +1302,7 @@ public class CrossLanguageCallHierarchyTest {
 				}, new NullProgressMonitor());
 		List<SearchMatch> elementKt = TestHelpers.filterKotlinMatches(elementMatches);
 		// Direct call to Kotlin participant's locateMatches
-		SearchParticipant ktParticipant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant ktParticipant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		assertNotNull(ktParticipant, "Kotlin participant should exist");
 		IFile ktCallerFile = TestHelpers.getFile(
@@ -1445,7 +1446,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		// Find work() declaration to use as caller
 		List<SearchMatch> decls = TestHelpers
@@ -2757,7 +2758,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("callService", project);
@@ -2812,7 +2813,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("run", project);
@@ -2872,7 +2873,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("createConfig", project);
@@ -2927,7 +2928,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("consume", project);
@@ -2978,7 +2979,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("extTest", project);
@@ -3031,7 +3032,7 @@ public class CrossLanguageCallHierarchyTest {
 				+ "}\n");
 		TestHelpers.waitUntilIndexesReady();
 
-		SearchParticipant participant = SearchParticipantRegistry
+		DerivedSourceSearchParticipant participant = DerivedSourceSearchParticipantRegistry
 				.getParticipant("kt");
 		List<SearchMatch> decls = TestHelpers
 				.searchMethodDeclarations("build", project);
